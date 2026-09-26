@@ -24,10 +24,25 @@ const io     = new Server(server, { maxHttpBufferSize: 1e6 }); // avatar ~ hasta
 app.use(express.static(path.join(__dirname)));
 
 // Mundo compartido (rejilla de tiles)
-const WORLD = { W: 15, H: 10, TILE: 40 };
+const WORLD = { W: 48, H: 13, TILE: 16 };
+
+// Terreno por tiles (debe coincidir con el cliente): 'W' muro infranqueable.
+const GREEN_PIXELS = new Set(['24,1','25,1','25,3','26,2','26,3','26,4','27,3','27,4','27,8','28,7','28,8','28,10','29,6','29,8','29,9','30,3','30,7','30,9']);
+function serverTileAt(x, y) {
+  if (x >= WORLD.W - 1) return 'W';                 // borde negro (col 47)
+  if (x === 0) return (y >= 4 && y <= 8) ? 'S' : 'G';
+  if (GREEN_PIXELS.has(x + ',' + y)) return 'G';
+  if (x >= 24) return 'D';
+  return 'G';
+}
+const SPAWN = { tx: 12, ty: 6 };
 
 // players: id -> { id, tx, ty, avatar, name, equipped, stats }
 const players = new Map();
+
+// Monedas Q soltadas en el campo: id -> { id, tx, ty, amount }
+const coins = new Map();
+let coinSeq = 0;
 
 // Construye y difunde la tabla de clasificación (electrones, Q, victorias)
 function broadcastLeaderboard() {
@@ -59,6 +74,39 @@ const pendingTradeInvite = new Map();
 const inTrade = new Map();
 // Datos de cada participante: socketId -> { offer:{...}, confirmed:bool }
 const tradeData = new Map();
+
+// ── Grupos (co-op) ──
+const groups = new Map();            // groupId -> Set(socketId)
+const playerGroup = new Map();       // socketId -> groupId
+const pendingGroupInvite = new Map();// destinatarioId -> invitadorId
+const inGroupBattle = new Map();     // socketId -> hostId
+let groupSeq = 1;
+function groupMembers(gid){
+  const s = groups.get(gid); if (!s) return [];
+  return Array.from(s).filter(id => players.has(id));
+}
+function groupInfo(gid){
+  return groupMembers(gid).map(id => { const p = players.get(id); return { id, name: (p && p.name) || id.slice(0, 4) }; });
+}
+function broadcastGroup(gid){
+  const info = groupInfo(gid);
+  groupMembers(gid).forEach(id => io.to(id).emit('group-update', { members: info }));
+}
+function leaveGroup(id){
+  const gid = playerGroup.get(id);
+  if (!gid){ return; }
+  playerGroup.delete(id);
+  const s = groups.get(gid);
+  if (!s) return;
+  s.delete(id);
+  const rest = groupMembers(gid);
+  if (rest.length <= 1){
+    rest.forEach(m => { playerGroup.delete(m); io.to(m).emit('group-update', { members: [] }); });
+    groups.delete(gid);
+  } else {
+    broadcastGroup(gid);
+  }
+}
 
 const TRADE_KEYS = ['up', 'down', 'proton', 'neutron', 'electron', 'hydrogen'];
 function emptyOffer() { return { up: 0, down: 0, proton: 0, neutron: 0, electron: 0, hydrogen: 0 }; }
@@ -98,10 +146,7 @@ function cleanupTrade(id) {
 }
 
 function spawnTile() {
-  return {
-    tx: Math.floor(Math.random() * WORLD.W),
-    ty: Math.floor(Math.random() * WORLD.H)
-  };
+  return { tx: SPAWN.tx, ty: SPAWN.ty };
 }
 
 io.on('connection', (socket) => {
@@ -121,6 +166,7 @@ io.on('connection', (socket) => {
       avatar: Array.isArray(data && data.avatar) ? data.avatar : null,
       name: (data && typeof data.name === 'string') ? data.name.slice(0, 12) : '',
       equipped: (data && typeof data.equipped === 'string') ? data.equipped.slice(0, 16) : 'proton',
+      partyKeys: ['proton'],
       stats: {
         electrons: (data && data.stats) ? (parseInt(data.stats.electrons, 10) || 0) : 0,
         Q:         (data && data.stats) ? (parseInt(data.stats.Q, 10) || 0) : 0,
@@ -133,6 +179,9 @@ io.on('connection', (socket) => {
     const existing = [];
     players.forEach((p, pid) => { if (pid !== socket.id) existing.push(p); });
     socket.emit('existing-players', existing);
+
+    // A mí: monedas Q que ya están tiradas en el campo
+    socket.emit('coins-existing', Array.from(coins.values()));
 
     // A todos: entré yo
     io.emit('player-joined', player);
@@ -147,8 +196,36 @@ io.on('connection', (socket) => {
     const tx = Math.max(0, Math.min(WORLD.W - 1, parseInt(data.tx, 10)));
     const ty = Math.max(0, Math.min(WORLD.H - 1, parseInt(data.ty, 10)));
     if (Number.isNaN(tx) || Number.isNaN(ty)) return;
+    if (serverTileAt(tx, ty) === 'W') return;  // el muro es infranqueable
     p.tx = tx; p.ty = ty;
     io.emit('player-moved', { id: socket.id, tx, ty });
+  });
+
+  // Soltar monedas Q en el campo
+  socket.on('drop-coin', (data) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    const amount = parseInt(data && data.amount, 10);
+    if (Number.isNaN(amount) || amount <= 0) return;
+    let tx = parseInt(data && data.tx, 10);
+    let ty = parseInt(data && data.ty, 10);
+    if (Number.isNaN(tx) || Number.isNaN(ty)) { tx = p.tx; ty = p.ty; }
+    tx = Math.max(0, Math.min(WORLD.W - 1, tx));
+    ty = Math.max(0, Math.min(WORLD.H - 1, ty));
+    const coin = { id: 'c' + (++coinSeq), tx, ty, amount };
+    coins.set(coin.id, coin);
+    io.emit('coin-dropped', coin);
+  });
+
+  // Recoger monedas Q del campo
+  socket.on('pickup-coin', (data) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    const id = data && data.id;
+    const coin = coins.get(id);
+    if (!coin) return;
+    coins.delete(id);
+    io.emit('coin-picked', { id, byId: socket.id, amount: coin.amount });
   });
 
   // Mensaje/emote opcional (p. ej. "¡atacado por un Hidrógeno!")
@@ -174,6 +251,16 @@ io.on('connection', (socket) => {
     if (!p) return;
     const k = String(data && data.key ? data.key : '').slice(0, 16);
     if (k) p.equipped = k;
+  });
+
+  // El jugador envía su equipo de batalla (para batallas de grupo)
+  socket.on('loadout', (data) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    let keys = (data && Array.isArray(data.keys)) ? data.keys : [];
+    keys = keys.filter(k => typeof k === 'string').map(k => k.slice(0, 16)).slice(0, 3);
+    if (keys.length === 0) keys = ['proton'];
+    p.partyKeys = keys;
   });
 
   // El jugador actualiza sus estadísticas (electrones, Q, victorias)
@@ -246,7 +333,11 @@ io.on('connection', (socket) => {
     io.to(oppId).emit('pvp-action', {
       kind: (data && data.kind === 'ability') ? 'ability' : 'attack',
       dmg: Math.max(0, Math.min(99, parseInt(data && data.dmg, 10) || 0)),
-      dodged: !!(data && data.dodged)
+      dodged: !!(data && data.dodged),
+      meHp: Math.max(0, Math.min(999, parseInt(data && data.meHp, 10) || 0)),
+      meMax: Math.max(1, Math.min(999, parseInt(data && data.meMax, 10) || 1)),
+      transformKey: (data && typeof data.transformKey === 'string') ? data.transformKey : null,
+      negate: !!(data && data.negate)
     });
   });
 
@@ -255,6 +346,86 @@ io.on('connection', (socket) => {
     const oppId = inBattle.get(socket.id);
     inBattle.delete(socket.id);
     if (oppId) inBattle.delete(oppId);
+  });
+
+  // ══ GRUPO (co-op) ══
+  socket.on('group-invite', (data) => {
+    const from = players.get(socket.id);
+    if (!from) return;
+    const targetId = String(data && data.targetId ? data.targetId : '');
+    const target = players.get(targetId);
+    if (!target) { socket.emit('group-error', { msg: 'Ese jugador ya no está disponible.' }); return; }
+    if (targetId === socket.id) { socket.emit('group-error', { msg: 'No puedes invitarte a ti mismo.' }); return; }
+    if (inBattle.has(socket.id) || inBattle.has(targetId) || inTrade.has(socket.id) || inTrade.has(targetId) ||
+        inGroupBattle.has(socket.id) || inGroupBattle.has(targetId)) {
+      socket.emit('group-error', { msg: 'Ese jugador está ocupado ahora mismo.' }); return;
+    }
+    if (playerGroup.has(targetId)) { socket.emit('group-error', { msg: 'Ese jugador ya está en un grupo.' }); return; }
+    if (pendingGroupInvite.has(targetId)) { socket.emit('group-error', { msg: 'Ese jugador ya tiene una invitación pendiente.' }); return; }
+    const gid = playerGroup.get(socket.id);
+    const size = gid ? groupMembers(gid).length : 1;
+    if (size >= 3) { socket.emit('group-error', { msg: 'Tu grupo ya está lleno (máx 3).' }); return; }
+    pendingGroupInvite.set(targetId, socket.id);
+    io.to(targetId).emit('group-invited', { fromId: socket.id, fromName: from.name || socket.id.slice(0, 4) });
+  });
+
+  socket.on('group-decline', () => {
+    const inviterId = pendingGroupInvite.get(socket.id);
+    pendingGroupInvite.delete(socket.id);
+    if (inviterId) {
+      const me = players.get(socket.id);
+      io.to(inviterId).emit('group-declined', { byName: (me && me.name) ? me.name : 'Jugador' });
+    }
+  });
+
+  socket.on('group-accept', () => {
+    const inviterId = pendingGroupInvite.get(socket.id);
+    pendingGroupInvite.delete(socket.id);
+    if (!inviterId) { socket.emit('group-error', { msg: 'La invitación ya no es válida.' }); return; }
+    const inviter = players.get(inviterId);
+    const me = players.get(socket.id);
+    if (!inviter || !me) { socket.emit('group-error', { msg: 'El jugador ya no está disponible.' }); return; }
+    if (playerGroup.has(socket.id)) { socket.emit('group-error', { msg: 'Ya estás en un grupo.' }); return; }
+    let gid = playerGroup.get(inviterId);
+    if (!gid) { gid = 'g' + (groupSeq++); groups.set(gid, new Set([inviterId])); playerGroup.set(inviterId, gid); }
+    const s = groups.get(gid);
+    if (!s) { socket.emit('group-error', { msg: 'El grupo ya no existe.' }); return; }
+    if (groupMembers(gid).length >= 3) { socket.emit('group-error', { msg: 'El grupo está lleno (máx 3).' }); return; }
+    s.add(socket.id); playerGroup.set(socket.id, gid);
+    broadcastGroup(gid);
+  });
+
+  socket.on('group-leave', () => { leaveGroup(socket.id); });
+
+  // ── Batalla de grupo (host autoritativo) ──
+  socket.on('group-battle-start', (data) => {
+    const gid = playerGroup.get(socket.id);
+    if (!gid) return;
+    const gm = groupMembers(gid);
+    if (gm.length < 2) return;
+    if (gm.some(id => inGroupBattle.has(id) || inBattle.has(id) || inTrade.has(id))) return;
+    gm.forEach(id => inGroupBattle.set(id, socket.id));
+    const members = gm.map(id => {
+      const p = players.get(id);
+      return { id, name: (p && p.name) || id.slice(0, 4), keys: (p && Array.isArray(p.partyKeys)) ? p.partyKeys : ['proton'], avatar: p ? p.avatar : null };
+    });
+    const foeType = String(data && data.foeType ? data.foeType : 'hydrogen').slice(0, 16);
+    gm.forEach(id => io.to(id).emit('group-battle-start', { hostId: socket.id, foeType, size: gm.length, members }));
+  });
+
+  socket.on('group-battle-sync', (data) => {
+    const gid = playerGroup.get(socket.id);
+    if (!gid) return;
+    if (inGroupBattle.get(socket.id) !== socket.id) return; // solo el host difunde
+    groupMembers(gid).forEach(id => { if (id !== socket.id) io.to(id).emit('group-battle-sync', data); });
+  });
+
+  socket.on('group-battle-end', (data) => {
+    const hostId = socket.id;
+    const affected = [];
+    inGroupBattle.forEach((h, id) => { if (h === hostId) affected.push(id); });
+    affected.forEach(id => inGroupBattle.delete(id));
+    affected.forEach(id => { if (id !== hostId) io.to(id).emit('group-battle-end', data || {}); });
   });
 
   // ══ INTERCAMBIO (trueque de objetos) ══
@@ -362,6 +533,25 @@ io.on('connection', (socket) => {
       cleanupTrade(socket.id);
       io.to(tradePartner).emit('trade-partner-left', {});
     }
+    // Limpiar invitaciones de grupo pendientes
+    pendingGroupInvite.forEach((inviterId, targetId) => {
+      if (inviterId === socket.id || targetId === socket.id) pendingGroupInvite.delete(targetId);
+    });
+    // Si estaba en una batalla de grupo
+    const myHost = inGroupBattle.get(socket.id);
+    if (myHost) {
+      if (myHost === socket.id) {
+        // El host se fue: terminar la batalla para todos (derrota)
+        const affected = [];
+        inGroupBattle.forEach((h, id) => { if (h === socket.id) affected.push(id); });
+        affected.forEach(id => inGroupBattle.delete(id));
+        affected.forEach(id => { if (id !== socket.id) io.to(id).emit('group-battle-end', { win: false }); });
+      } else {
+        inGroupBattle.delete(socket.id);
+      }
+    }
+    // Salir del grupo
+    leaveGroup(socket.id);
     players.delete(socket.id);
     io.emit('player-left', { id: socket.id });
     broadcastLeaderboard();
@@ -371,7 +561,7 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('\n⚛️  Elementaria Online — servidor iniciado');
+  console.log('\n  Elementaria Online — servidor iniciado');
   console.log('   Local:  http://localhost:' + PORT);
   const nets = require('os').networkInterfaces();
   for (const name of Object.keys(nets)) {
