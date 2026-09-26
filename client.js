@@ -16,7 +16,7 @@ const state = {
   protons: 0,
   neutrons: 0,
   electrons: 0,
-  atoms: { hydrogen: 0, helium: 0, lithium: 0 },
+  atoms: { hydrogen: 0, helium: 0, lithium: 0, beryllium: 0 },
   slots: [null, null, null],
   avatar: null,
   name: '',
@@ -36,7 +36,8 @@ const COMBATANTS = {
   electron: { key:'electron', label:'Electrón', icon:'', hp:5,  atk:2, dodge:0.35, ability:{name:'Chispa',    icon:'', dmg:20, every:2, selfDmg:1} },
   hydrogen: { key:'hydrogen', label:'Hidrógeno',icon:'Ⓑ', hp:20, atk:4, dodge:0.20, ability:{name:'Fusión',    icon:'', dmg:20, every:5, transform:'proton', transformHp:5} },
   helium:   { key:'helium',   label:'Helio',    icon:'', hp:30, atk:5, dodge:0.15, ability:{name:'Radiación α', icon:'', dmg:14, every:3} },
-  lithium:  { key:'lithium',  label:'Litio',    icon:'', hp:30, atk:5, dodge:0.05, ability:{name:'Metabolismo', icon:'', every:3, healAll:10} }
+  lithium:  { key:'lithium',  label:'Litio',    icon:'', hp:30, atk:5, dodge:0.05, ability:{name:'Metabolismo', icon:'', every:3, healAll:10} },
+  beryllium:{ key:'beryllium',label:'Berilio',  icon:'', hp:40, atk:20, dodge:0.05, ability:{name:'Fisión', icon:'', every:5, fission:true, dmg:80, allyDmg:10, splitInto:'helium', splitCount:2} }
 };
 /* ---------- Aspecto visual de las unidades (bola con letra) ---------- */
 function unitBall(key, size){
@@ -45,6 +46,7 @@ function unitBall(key, size){
   if (key === 'hydrogen') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#eaf3ff,#9fc0ff);box-shadow:0 0 ${Math.round(size/3)}px rgba(160,190,255,.5);display:flex;align-items:center;justify-content:center;font-weight:800;color:#123;font-size:${Math.round(size*0.34)}px;">H</div>`;
   if (key === 'helium') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff3d6,#ffd76a);box-shadow:0 0 ${Math.round(size/3)}px rgba(255,215,106,.5);display:flex;align-items:center;justify-content:center;font-weight:800;color:#3a2a00;font-size:${Math.round(size*0.3)}px;">He</div>`;
   if (key === 'lithium') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#d9ffdc,#7ad67f);box-shadow:0 0 ${Math.round(size/3)}px rgba(122,214,127,.5);display:flex;align-items:center;justify-content:center;font-weight:800;color:#0a2a0c;font-size:${Math.round(size*0.34)}px;">Li</div>`;
+  if (key === 'beryllium') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#eef1f4,#9aa6b2);box-shadow:0 0 ${Math.round(size/3)}px rgba(154,166,178,.6);display:flex;align-items:center;justify-content:center;font-weight:800;color:#1a2028;font-size:${Math.round(size*0.34)}px;">Be</div>`;
   return null;
 }
 /* ---------- Enemigos salvajes del campo ---------- */
@@ -79,10 +81,15 @@ function ownedCount(key){
 function expForLevel(lvl){
   if (lvl <= 1) return 0;
   if (lvl === 2) return 100;   // Nivel 1 -> 2 : 100 EXP
-  if (lvl === 3) return 250;   // Nivel 2 -> 3 : +150 EXP (total 250)
-  if (lvl === 4) return 450;   // Nivel 3 -> 4 : +200 EXP (total 450)
-  if (lvl === 5) return 700;   // Nivel 4 -> 5 : +250 EXP (total 700)
-  return 700 + (lvl - 5) * 250; // niveles superiores: +250 cada uno
+  if (lvl === 3) return 200;   // Nivel 2 -> 3 : total 200 EXP
+  if (lvl === 4) return 300;   // Nivel 3 -> 4 : total 300 EXP
+  if (lvl === 5) return 400;   // Nivel 4 -> 5 : total 400 EXP
+  if (lvl === 6) return 750;   // Nivel 5 -> 6 : +350 (total 750)
+  if (lvl === 7) return 1250;  // Nivel 6 -> 7 : +500 (total 1250)
+  if (lvl === 8) return 1950;  // Nivel 7 -> 8 : +700 (total 1950)
+  if (lvl === 9) return 2850;  // Nivel 8 -> 9 : +900 (total 2850)
+  if (lvl === 10) return 3850; // Nivel 9 -> 10 : +1000 (total 3850)
+  return 3850 + (lvl - 10) * 1000; // niveles superiores: +1000 cada uno
 }
 function getLevel(){
   let lvl = 1;
@@ -455,6 +462,7 @@ socket.on('group-update',   (d) => {
 });
 socket.on('group-battle-start', (d) => startGroupBattle(d));
 socket.on('group-battle-sync',  (d) => applyGroupBattleSync(d));
+socket.on('group-battle-act',   (d) => { if (d) applyGroupAction(d.from, d.action); });
 socket.on('group-battle-end',   (d) => endGroupBattleRemote(d));
 
 function sendTradeInvite(id){
@@ -894,6 +902,126 @@ function confirmDropCoin(){
   closeModal();
   toast('Soltaste ' + amt + ' Q en el suelo.');
 }
+/* ================= EVENTOS DE CAMPO ABIERTO (código 84642 / Roaming) ================= */
+let gameEvent = null;   // {type, endsAt, qTimer, endTimer, uiTimer}
+const EVENT_NAMES = {1:'Lluvia de átomos', 2:'Lluvia de Q', 3:'Átomos agresivos'};
+function eventActive(type){ if(!gameEvent) return false; if(Date.now() >= gameEvent.endsAt) return false; return type ? gameEvent.type===type : true; }
+function eventEncounterMul(){ return eventActive(1) ? 5 : 1; }
+function eventBonusMul(){ return eventActive(1) ? 5 : 1; }
+function eventFoeStatMul(){ return eventActive(3) ? 2 : 1; }
+function eventRewardMul(){ return eventActive(3) ? 3 : 1; }
+function scaleReward(r, mul){ if(!r || !mul || mul===1) return r; const o={}; for(const k in r){ o[k]=r[k]*mul; } return o; }
+let secretBuf='';
+function feedSecret(ch){ secretBuf=(secretBuf+ch).slice(-5); if(secretBuf==='84642'){ secretBuf=''; openEventPassword(); } }
+function openEventPassword(){
+  openModal(`
+    <h2 style="margin:0 0 6px;"> Interfaz de eventos</h2>
+    <p class="muted" style="margin:0 0 12px;">Introduce la contraseña para verificar tu identidad.</p>
+    <input id="evtPass" type="password" placeholder="Contraseña" style="width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--panel2); background:#0a0e28; color:#fff;">
+    <p id="evtPassErr" style="color:var(--accent2); font-size:.82rem; margin:8px 0 0; display:none;">Contraseña incorrecta.</p>
+    <div class="row" style="margin-top:16px; justify-content:flex-end; gap:8px;">
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="checkEventPassword()">Verificar</button>
+    </div>`);
+  setTimeout(()=>{ const i=document.getElementById('evtPass'); if(i){ i.focus(); i.addEventListener('keydown',ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); checkEventPassword(); } }); } }, 60);
+}
+function checkEventPassword(){
+  const i=document.getElementById('evtPass');
+  if(i && i.value==='Roaming'){ openEventChooser(); }
+  else { const e=document.getElementById('evtPassErr'); if(e) e.style.display='block'; }
+}
+function openEventChooser(){
+  openModal(`
+    <h2 style="text-align:center;margin:0 0 4px;"> Elige un evento</h2>
+    <p class="muted" style="text-align:center;margin:0 0 14px;">Identidad verificada. Selecciona uno de los 3 eventos.</p>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div class="card" style="background:#0a0e28; cursor:pointer;" onclick="startEvent(1)">
+        <p><b> Lluvia de átomos (1:00)</b></p>
+        <p class="muted" style="font-size:.82rem;">Probabilidad de encontrar átomos y de botín bonus x5. ¡Con confeti y temporizador!</p>
+      </div>
+      <div class="card" style="background:#0a0e28; cursor:pointer;" onclick="startEvent(2)">
+        <p><b> Lluvia de Q (0:30)</b></p>
+        <p class="muted" style="font-size:.82rem;">Cada segundo cae entre 1 y 10 Q en un punto aleatorio del mapa (visible para todos).</p>
+      </div>
+      <div class="card" style="background:#0a0e28; cursor:pointer;" onclick="startEvent(3)">
+        <p><b> Átomos agresivos (1:00)</b></p>
+        <p class="muted" style="font-size:.82rem;">Los átomos tienen x2 vida y x2 daño, pero dan x3 recompensa (también el botín bonus).</p>
+      </div>
+    </div>
+    <div class="row" style="justify-content:center; margin-top:14px;">
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    </div>`);
+}
+function startEvent(type){
+  closeModal();
+  clearEvent();
+  const dur = type===2 ? 30000 : 60000;
+  gameEvent = { type, endsAt: Date.now()+dur };
+  showEventTimer();
+  if(type===1){ startConfetti(); }
+  if(type===2){ gameEvent.qTimer = setInterval(rainQ, 1000); }
+  gameEvent.endTimer = setTimeout(endEvent, dur);
+  toast('Evento activado: ' + EVENT_NAMES[type] + '.');
+}
+function endEvent(){
+  const t = gameEvent ? gameEvent.type : 0;
+  clearEvent();
+  if(t){ toast('El evento "' + EVENT_NAMES[t] + '" ha terminado.'); }
+}
+function clearEvent(){
+  if(gameEvent){
+    if(gameEvent.qTimer) clearInterval(gameEvent.qTimer);
+    if(gameEvent.endTimer) clearTimeout(gameEvent.endTimer);
+    if(gameEvent.uiTimer) clearInterval(gameEvent.uiTimer);
+  }
+  gameEvent=null;
+  removeEventTimer();
+  stopConfetti();
+}
+function rainQ(){
+  if(!eventActive(2)) return;
+  const amt = 1 + Math.floor(Math.random()*10);   // 1..10 Q
+  let x, y, tries=0;
+  do { x=Math.floor(Math.random()*(MAP_W-1)); y=Math.floor(Math.random()*MAP_H); tries++; } while(tileAt(x,y)==='W' && tries<30);
+  socket.emit('drop-coin', { amount: amt, tx: x, ty: y });   // el servidor difunde la moneda a todos
+}
+function removeEventTimer(){ const d=document.getElementById('eventTimer'); if(d) d.remove(); }
+function showEventTimer(){
+  removeEventTimer();
+  const d=document.createElement('div');
+  d.id='eventTimer';
+  d.style.cssText='position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:80;background:rgba(6,10,24,.94);border:2px solid var(--gold);border-radius:14px;padding:8px 22px;text-align:center;box-shadow:0 6px 24px rgba(0,0,0,.55);pointer-events:none;';
+  document.body.appendChild(d);
+  updateEventTimer();
+  gameEvent.uiTimer=setInterval(updateEventTimer, 250);
+}
+function updateEventTimer(){
+  const d=document.getElementById('eventTimer'); if(!d||!gameEvent){ return; }
+  const ms=Math.max(0, gameEvent.endsAt-Date.now());
+  const s=Math.ceil(ms/1000); const mm=Math.floor(s/60); const ss=s%60;
+  d.innerHTML='<div style="font-size:.72rem;letter-spacing:1px;color:var(--gold);">'+EVENT_NAMES[gameEvent.type].toUpperCase()+'</div><div style="font-size:2.4rem;font-weight:800;color:#fff;line-height:1.05;">'+mm+':'+String(ss).padStart(2,'0')+'</div>';
+}
+let confettiRAF=null, confettiCanvas=null;
+function startConfetti(){
+  stopConfetti();
+  const c=document.createElement('canvas');
+  c.id='confetti'; c.style.cssText='position:fixed;inset:0;z-index:70;pointer-events:none;';
+  c.width=window.innerWidth; c.height=window.innerHeight;
+  document.body.appendChild(c); confettiCanvas=c;
+  const ctx=c.getContext('2d');
+  const cols=['#ffd76a','#ff5a76','#4fd1ff','#7ad67f','#c79cff','#ff9d3b'];
+  const parts=[];
+  for(let i=0;i<140;i++){ parts.push({x:Math.random()*c.width, y:Math.random()*-c.height, r:4+Math.random()*6, vy:1.5+Math.random()*3, vx:-1+Math.random()*2, col:cols[Math.floor(Math.random()*cols.length)], rot:Math.random()*6.28, vr:-.2+Math.random()*.4}); }
+  function frame(){
+    if(!confettiCanvas) return;
+    ctx.clearRect(0,0,c.width,c.height);
+    parts.forEach(p=>{ p.y+=p.vy; p.x+=p.vx; p.rot+=p.vr; if(p.y>c.height+10){ p.y=-10; p.x=Math.random()*c.width; }
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.fillStyle=p.col; ctx.fillRect(-p.r/2,-p.r/2,p.r,p.r*.6); ctx.restore(); });
+    confettiRAF=requestAnimationFrame(frame);
+  }
+  frame();
+}
+function stopConfetti(){ if(confettiRAF){ cancelAnimationFrame(confettiRAF); confettiRAF=null; } if(confettiCanvas){ confettiCanvas.remove(); confettiCanvas=null; } }
 function sceneShop(){
   show(`
   <div class="scene active">
@@ -974,7 +1102,7 @@ let rafId = null;
 function startWorldLoop(){
   const cw = VIEW_W * TS, ch = VIEW_H * TS;
   show(`
-  <div class="scene active">
+  <div class="scene active" style="overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch;">
     <div class="row" style="justify-content:space-between;">
       <h2 style="margin:0;"> Mundo compartido</h2>
       <div class="row">
@@ -1033,10 +1161,21 @@ function startWorldLoop(){
         else if (e.key === 'Escape'){ e.preventDefault(); toggleChat(); }
         return; // no mover mientras escribes
       }
+      const typingField = document.activeElement && (document.activeElement.tagName==='INPUT' || document.activeElement.tagName==='TEXTAREA');
+      if (typingField){ return; } // escribiendo en un campo (p. ej. contraseña del evento)
       if (e.key === 't' || e.key === 'T'){ e.preventDefault(); toggleChat(); return; }
-      if (battleActive){ return; }
+      if (typeof pvp !== 'undefined' && pvp && !pvp.over){
+        if (e.key === '1'){ e.preventDefault(); pvpAct('attack'); return; }
+        if (e.key === '2'){ e.preventDefault(); pvpAct('ability'); return; }
+      }
+      if (battleActive){
+        if (e.key === '1'){ e.preventDefault(); pAct('attack'); return; }
+        if (e.key === '2'){ e.preventDefault(); pAct('ability'); return; }
+        return;
+      }
       if (e.key === 'Escape'){ closeModal(); return; }
       if (document.getElementById('modal')){ if (e.key==='e'||e.key==='E'||e.key==='g'||e.key==='G') closeModal(); return; }
+      if (e.key>='0' && e.key<='9'){ feedSecret(e.key); return; }   // secuencia secreta de eventos
       if (e.key === 'e' || e.key === 'E'){ openInventory(); return; }
       if (e.key === 'p' || e.key === 'P'){ openPvpList(); return; }
       if (e.key === 'i' || e.key === 'I'){ startTradeSelected(); return; }
@@ -1108,7 +1247,7 @@ function tryMove(dx, dy){
   }
   if (t === 'S'){ openWorldShop(); return; }   // entrar a la tienda (comprar con Q)
   if (!battleEnabled) return;   // modo sin peleas: solo caminar
-  const LM = luckMul();   // 2x si la poción de suerte está activa
+  const LM = luckMul() * eventEncounterMul();   // 2x poción de suerte, x5 durante el evento Lluvia de átomos
   if (t === 'D' && Math.random() < 0.001*LM) triggerEncounter('boron');   // Boro salvaje: 0,1% en el desierto
   else if (t === 'G' && Math.random() < 0.001*LM) triggerEncounter('lithium');   // Litio salvaje: 0,1% en césped
   else if (t === 'D' && Math.random() < 0.005*LM) triggerEncounter('beryllium');   // Berilio salvaje: 0,5% en el desierto
@@ -1282,6 +1421,7 @@ function startBattle(foeType){
     party = [k];
   }
   const f = WILD_FOES[foeType];
+  const sm = eventFoeStatMul();   // x2 vida y daño durante el evento Átomos agresivos
   const units = party.map(key => {
     const c = COMBATANTS[key];
     return {key:key, label:c.label, icon:c.icon, hp:c.hp, max:c.hp, atk:c.atk, dodge:c.dodge,
@@ -1293,7 +1433,7 @@ function startBattle(foeType){
     foeInfo: f,
     units: units,
     active: 0,
-    foe: { hp:f.hp, max:f.hp, atk:f.atk, dodge:f.dodge, label:f.label, icon:f.icon },
+    foe: { hp:f.hp*sm, max:f.hp*sm, atk:f.atk*sm, dodge:f.dodge, label:f.label, icon:f.icon },
     turn:1, over:false, win:false,
     log:[` ¡Un ${f.label} salvaje apareció! Envías a ${u0.label} ${u0.icon}${units.length>1?` (equipo de ${units.length})`:''}.`]
   };
@@ -1301,7 +1441,7 @@ function startBattle(foeType){
     const pool = ['hydrogen','helium','lithium'];
     const ck = pool[Math.floor(Math.random()*pool.length)];
     const cf = WILD_FOES[ck];
-    battle.companion = { hp:cf.hp, max:cf.hp, atk:cf.atk, dodge:cf.dodge, label:cf.label,
+    battle.companion = { hp:cf.hp*sm, max:cf.hp*sm, atk:cf.atk*sm, dodge:cf.dodge, label:cf.label,
       letter:cf.letter, gradient:cf.gradient, textColor:cf.textColor, icon:cf.icon, alive:true };
     battle.target = 'foe';
     blog(` El ${f.label} viene acompañado de un ${cf.label} ${cf.letter}. ¡Dos enemigos!`);
@@ -1309,6 +1449,28 @@ function startBattle(foeType){
   renderBattle();
 }
 function blog(m){ battle.log.push(m); if (battle.log.length > 20) battle.log.shift(); }
+// Fisión del Berilio: la unidad se divide en 2 Helios a media vida
+function berylliumSplit(u){
+  const b = battle; const t = COMBATANTS.helium;
+  const halfHp = Math.max(1, Math.round(t.hp/2)); // 15
+  // preservar referencias de unidad activa por dueño (batalla de grupo)
+  let activeRefs = null;
+  if (b.group && b.activeByOwner){ activeRefs = {}; Object.keys(b.activeByOwner).forEach(o=>{ activeRefs[o] = b.units[b.activeByOwner[o]]; }); }
+  const idx = b.units.indexOf(u);
+  const owner = u.ownerId, oname = u.ownerName;
+  const pref = oname ? oname+': ' : '';
+  blog(` ¡El ${u.label} se divide por fisión en 2 ${t.label} (${halfHp} HP cada uno)!`);
+  // convertir la unidad actual en Helio
+  u.key=t.key; u.label=pref+t.label; u.icon=t.icon; u.atk=t.atk; u.dodge=t.dodge; u.ability=t.ability;
+  u.max=t.hp; u.hp=halfHp; u.actCount=0; u.abilityReady=false;
+  // segundo Helio
+  const he2 = { key:t.key, label:pref+t.label, icon:t.icon, hp:halfHp, max:t.hp, atk:t.atk, dodge:t.dodge,
+    ability:t.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0,
+    ownerId:owner, ownerName:oname, avatar:null };
+  b.units.splice(idx+1, 0, he2);
+  // remapear índices activos por dueño tras el splice
+  if (activeRefs){ Object.keys(activeRefs).forEach(o=>{ const ni = b.units.indexOf(activeRefs[o]); if (ni>=0) b.activeByOwner[o] = ni; }); }
+}
 function autoSwitch(){
   const b=battle;
   const idx=b.units.findIndex(u=>u.alive);
@@ -1319,6 +1481,12 @@ function autoSwitch(){
 }
 function switchUnit(idx){
   const b=battle; if(b.over) return;
+  if (b.group){
+    const u=b.units[idx]; if(!u || u.ownerId!==myId || !u.alive) return;
+    if (!isMyGroupTurn()) { toast('No es tu turno.'); return; }
+    groupCmd({type:'switch', idx});
+    return;
+  }
   if(b.spectator) return;
   if(idx===b.active) return;
   const u=b.units[idx]; if(!u || !u.alive) return;
@@ -1327,7 +1495,10 @@ function switchUnit(idx){
   setTimeout(enemyTurn, 400);
   renderBattle();
 }
-function setTarget(t){ if(!battle||battle.over||battle.spectator) return; battle.target=t; renderBattle(); }
+function setTarget(t){ if(!battle||battle.over) return; const b=battle;
+  if (b.group){ if(!isMyGroupTurn()) return; groupCmd({type:'target', t}); return; }
+  if (b.spectator) return; b.target=t; renderBattle();
+}
 function foeBox(o, info, opts){
   const dead = (o.alive===false) || o.hp<=0;
   const pct = Math.min(100, Math.max(0, o.hp/o.max*100));
@@ -1347,6 +1518,7 @@ function foeBox(o, info, opts){
 }
 function renderBattle(){
   const b = battle;
+  if (b && b.group) return renderGroupBattle();
   const u = b.units[b.active];
   const pPct = Math.min(100, Math.max(0, u.hp / u.max * 100));
   const hPct = Math.max(0, b.foe.hp / b.foe.max * 100);
@@ -1372,8 +1544,8 @@ function renderBattle(){
     actionRow = `<button class="btn" onclick="${cont}">Continuar </button>`;
   } else {
     actionRow = `
-        <button class="btn" onclick="pAct('attack')"> Ataque</button>
-        <button class="btn alt" ${canAbility ? '' : 'disabled'} onclick="pAct('ability')">${abilityLabel}</button>`;
+        <button class="btn" onclick="pAct('attack')"> Ataque [1]</button>
+        <button class="btn alt" ${canAbility ? '' : 'disabled'} onclick="pAct('ability')">${abilityLabel} [2]</button>`;
   }
   openModal(`
     <h2 style="text-align:center;"> Batalla — Turno ${b.turn}</h2>
@@ -1407,6 +1579,13 @@ function renderBattle(){
 }
 function pAct(kind){
   const b = battle; if (b.over) return;
+  if (b.group){
+    if (!isMyGroupTurn()){ toast('No es tu turno.'); return; }
+    const u = myActiveUnit(); if (!u || !u.alive) return;
+    if (kind === 'ability' && !u.abilityReady) return;
+    groupCmd({type:'act', kind});
+    return;
+  }
   if (b.spectator) return;
   const u = b.units[b.active];
   if (kind === 'ability' && !u.abilityReady) return;
@@ -1430,6 +1609,36 @@ function pAct(kind){
     sfxBonus();
     u.actCount++;
     u.abilityReady = (u.actCount % u.ability.every === (u.ability.every - 1));
+    setTimeout(enemyTurn, 400);
+    renderBattle();
+    return;
+  }
+  if (kind === 'ability' && u.ability.fission){
+    // Fisión: daño masivo a enemigos + daño a todo tu equipo, luego se divide en 2 Helios
+    u.abilityReady = false;
+    const eDmg = u.ability.dmg;
+    sfxBoomBig(); shakeEl(null, 20, 600);
+    blog(` ${u.label} usa ${u.ability.name} ${u.ability.icon} — ¡FISIÓN! ${eDmg} de daño a los enemigos.`);
+    b.foe.hp -= eDmg;
+    if (b.companion && b.companion.alive) b.companion.hp -= eDmg;
+    const aDmg = u.ability.allyDmg || 0;
+    if (aDmg){
+      blog(` La reacción golpea a TODO tu equipo: ${aDmg} de daño a cada unidad.`);
+      b.units.forEach(x=>{ if(x.alive){ x.hp -= aDmg; if(x.hp<=0){ x.hp=0; x.alive=false; blog(` Tu ${x.label} cayó por la fisión.`); } } });
+    }
+    u.actCount++;
+    // muerte del acompañante / victoria
+    if (b.companion && b.companion.alive && b.companion.hp <= 0){ b.companion.hp=0; b.companion.alive=false; blog(` ¡El acompañante ${b.companion.label} fue derrotado!`); if (b.target==='comp') b.target='foe'; }
+    if (b.foe.hp < 0) b.foe.hp = 0;
+    if (b.foe.hp <= 0 && b.companion && b.companion.alive){ b.target='comp'; }
+    const foeDown = b.foe.hp<=0; const compDown = !b.companion || !b.companion.alive;
+    if (foeDown && compDown){ b.foe.hp=0; b.over=true; b.win=true; blog(` ¡${b.foe.label} derrotado!`);
+      const db=b.foeInfo.deathBlast; if(db){ blog(` ¡${b.foe.label} explota al morir! ${db} de daño a TODO tu equipo.`); sfxBoomBig(); shakeEl(null,22,650); b.units.forEach(x=>{ if(x.alive){ x.hp-=db; if(x.hp<=0){x.hp=0;x.alive=false;} } }); }
+      sfxVictory(); renderBattle(); return; }
+    // dividir el Berilio en 2 Helios a media vida
+    if (u.alive){ berylliumSplit(u); }
+    if (b.units.every(x=>!x.alive)){ b.over=true; b.win=false; blog(` Todas tus unidades cayeron…`); renderBattle(); return; }
+    if (!b.units[b.active] || !b.units[b.active].alive){ autoSwitch(); }
     setTimeout(enemyTurn, 400);
     renderBattle();
     return;
@@ -1561,16 +1770,19 @@ function endBattle(){
   if (battle.win){
     state.wins++;
     const f = battle.foeInfo;
+    const rm = eventRewardMul();   // x3 recompensa durante el evento Átomos agresivos
+    const rew = scaleReward(f.reward, rm);
+    const bon = scaleReward(f.bonus, rm);
     const lvlBefore = getLevel();
     // Recompensa garantizada (100%)
-    applyReward(f.reward);
-    blog(` ${rewardParts(f.reward)}`);
+    applyReward(rew);
+    blog(` ${rewardParts(rew)}`);
     if (getLevel() > lvlBefore){ blog(` ¡Subiste al Nivel ${getLevel()}!${getLevel()>=2?' Ya puedes llevar 2 unidades (Inventario).':''}`); sfxLevelUp(); }
-    // Recompensa con probabilidad según el enemigo (x2 con poción de suerte)
-    if (Math.random() < Math.min(1, f.bonusChance * luckMul())){
-      applyReward(f.bonus);
+    // Recompensa con probabilidad según el enemigo (x2 con poción de suerte, x5 en Lluvia de átomos)
+    if (Math.random() < Math.min(1, f.bonusChance * luckMul() * eventBonusMul())){
+      applyReward(bon);
       sfxBonus();
-      blog(` ¡Botín raro! ${rewardParts(f.bonus)}`);
+      blog(` ¡Botín raro! ${rewardParts(bon)}`);
     }
   }
   battleActive = false;
@@ -1607,7 +1819,19 @@ function serializeBattle(){
   return {
     turn:b.turn, over:b.over, win:b.win, active:b.active, foeType:b.foeType,
     foe:{hp:b.foe.hp, max:b.foe.max, label:b.foe.label, icon:b.foe.icon},
-    units:b.units.map(u => ({ key:u.key, label:u.label, icon:u.icon, hp:u.hp, max:u.max, alive:u.alive, avatar:u.avatar||null })),
+    companion: b.companion ? { hp:b.companion.hp, max:b.companion.max, label:b.companion.label,
+      letter:b.companion.letter, gradient:b.companion.gradient, textColor:b.companion.textColor,
+      icon:b.companion.icon, alive:b.companion.alive } : null,
+    target: b.target || 'foe',
+    players: b.players || null,
+    turnOwner: b.turnOwner || null,
+    phaseIdx: (b.phaseIdx==null? null : b.phaseIdx),
+    activeByOwner: b.activeByOwner || null,
+    units:b.units.map(u => ({ key:u.key, label:u.label, icon:u.icon, hp:u.hp, max:u.max, alive:u.alive,
+      avatar:u.avatar||null, ownerId:u.ownerId||null, ownerName:u.ownerName||null,
+      immuneTurns:u.immuneTurns||0, abilityReady:!!u.abilityReady, actCount:u.actCount||0,
+      abilityIcon:(u.ability&&u.ability.icon)||'', abilityName:(u.ability&&u.ability.name)||'',
+      abilityEvery:(u.ability&&u.ability.every)||1 })),
     log:b.log
   };
 }
@@ -1615,6 +1839,264 @@ function broadcastBattle(){
   if (groupBattle && groupBattle.host && battle && battle.group){
     socket.emit('group-battle-sync', { b: serializeBattle() });
   }
+}
+
+/* ---- Turnos por jugador (batalla de grupo) ---- */
+function myActiveUnit(){
+  const b = battle; if (!b) return null;
+  if (b.group){ const ai = b.activeByOwner ? b.activeByOwner[myId] : null; return (ai!=null) ? b.units[ai] : null; }
+  return b.units[b.active];
+}
+function isMyGroupTurn(){ return !!(battle && battle.group && !battle.over && battle.turnOwner === myId); }
+function ownerName(id){
+  if (id === 'enemy') return 'Enemigo';
+  const b = battle; const p = b && b.players ? b.players.find(x=>x.id===id) : null;
+  if (id === myId) return 'Tú';
+  return p ? p.name : 'Jugador';
+}
+// El host aplica una acción; los invitados envían la acción al host
+function groupCmd(action){
+  if (groupBattle && groupBattle.host){ applyGroupAction(myId, action); }
+  else { socket.emit('group-battle-act', { action }); }
+}
+function applyGroupAction(ownerId, action){
+  const b = battle;
+  if (!b || !b.group || !groupBattle || !groupBattle.host || b.over || !action) return;
+  if (action.type === 'switch'){
+    const idx = action.idx|0; const u = b.units[idx];
+    if (u && u.ownerId === ownerId && u.alive){ b.activeByOwner[ownerId] = idx; renderBattle(); }
+    return;
+  }
+  if (action.type === 'target'){
+    if (b.turnOwner === ownerId){ b.target = action.t; renderBattle(); }
+    return;
+  }
+  if (action.type === 'act'){
+    if (b.turnOwner !== ownerId) return;
+    const ai = b.activeByOwner[ownerId]; const u = b.units[ai];
+    if (!u || u.ownerId !== ownerId || !u.alive){ advanceGroupTurn(); return; }
+    gUnitAction(u, action.kind);
+    if (b.over){ renderBattle(); return; }
+    advanceGroupTurn();
+  }
+}
+// Efecto de una acción de unidad (solo host). No gestiona el paso de turno.
+function gUnitAction(u, kind){
+  const b = battle;
+  if (kind === 'ability' && !u.abilityReady) kind = 'attack';
+  if (kind === 'ability' && u.ability.immune){
+    u.immuneTurns = u.ability.immuneTurns || 3; u.abilityReady = false;
+    blog(` ${u.label} usa ${u.ability.name} — inmune ${u.immuneTurns} turnos.`);
+    u.actCount++; u.abilityReady = (u.actCount % u.ability.every === (u.ability.every - 1)); return;
+  }
+  if (kind === 'ability' && u.ability.healAll){
+    const amt = u.ability.healAll; u.abilityReady = false;
+    b.units.forEach(x=>{ if(x.alive){ const old=Math.max(0,x.hp); x.hp += amt; blog(` ${x.label}: ${old}HP+${amt}HP`); } });
+    blog(` ${u.label} usa ${u.ability.name} — sana +${amt} a TODO el equipo.`); sfxBonus();
+    u.actCount++; u.abilityReady = (u.actCount % u.ability.every === (u.ability.every - 1)); return;
+  }
+  if (kind === 'ability' && u.ability.fission){
+    u.abilityReady = false;
+    const eDmg = u.ability.dmg;
+    sfxBoomBig(); shakeEl(null, 20, 600);
+    blog(` ${u.label} usa ${u.ability.name} ${u.ability.icon} — ¡FISIÓN! ${eDmg} de daño a los enemigos.`);
+    b.foe.hp -= eDmg;
+    if (b.companion && b.companion.alive) b.companion.hp -= eDmg;
+    const aDmg = u.ability.allyDmg || 0;
+    if (aDmg){
+      blog(` La reacción golpea a TODAS las unidades del grupo: ${aDmg} de daño a cada una.`);
+      b.units.forEach(x=>{ if(x.alive){ x.hp -= aDmg; if(x.hp<=0){ x.hp=0; x.alive=false; blog(` ${x.label} cayó por la fisión.`); } } });
+    }
+    u.actCount++;
+    if (b.companion && b.companion.alive && b.companion.hp <= 0){ b.companion.hp=0; b.companion.alive=false; blog(` ¡El acompañante ${b.companion.label} fue derrotado!`); if (b.target==='comp') b.target='foe'; }
+    if (b.foe.hp < 0) b.foe.hp = 0;
+    if (b.foe.hp <= 0 && b.companion && b.companion.alive){ b.target='comp'; }
+    const foeDown = b.foe.hp<=0; const compDown = !b.companion || !b.companion.alive;
+    if (foeDown && compDown){ b.foe.hp=0; b.over=true; b.win=true; blog(` ¡${b.foe.label} derrotado!`);
+      const db=b.foeInfo.deathBlast; if(db){ blog(` ¡${b.foe.label} explota al morir! ${db} de daño a TODO el equipo.`); sfxBoomBig(); shakeEl(null,22,650); b.units.forEach(x=>{ if(x.alive){ x.hp-=db; if(x.hp<=0){x.hp=0;x.alive=false;} } }); }
+      sfxVictory(); return; }
+    if (u.alive){ berylliumSplit(u); }
+    return;
+  }
+  const dmg = kind === 'ability' ? u.ability.dmg : u.atk;
+  const nm = kind === 'ability' ? `${u.ability.name} ${u.ability.icon}` : 'Ataque ';
+  const tgt = (b.companion && b.companion.alive && b.target==='comp') ? b.companion : b.foe;
+  sfxSlash(); shakeEl();
+  if (Math.random() < tgt.dodge){ blog(`${u.label} usa ${nm}…  ¡el ${tgt.label} esquivó! (0)`); }
+  else { tgt.hp -= dmg; blog(`${u.label} usa ${nm} → ${dmg} de daño a ${tgt.label}.`); }
+  if (kind === 'ability'){
+    u.abilityReady = false;
+    if (u.ability.selfDmg){ u.hp -= u.ability.selfDmg; blog(` ${u.label} pierde ${u.ability.selfDmg} HP por el esfuerzo.`); }
+    if (u.ability.transform && COMBATANTS[u.ability.transform]){
+      const newHp = u.ability.transformHp || 5; const t = COMBATANTS[u.ability.transform];
+      blog(` ¡${u.label} se convierte en ${t.label} ${t.icon} (${newHp} HP)!`);
+      u.key=t.key; u.label=(u.ownerName?u.ownerName+': ':'')+t.label; u.icon=t.icon; u.atk=t.atk; u.dodge=t.dodge; u.ability=t.ability;
+      u.max=t.hp; u.hp=Math.min(newHp, t.hp); u.actCount=0;
+    }
+  }
+  u.actCount++; u.abilityReady = (u.actCount % u.ability.every === (u.ability.every - 1));
+  if (b.companion && b.companion.alive && b.companion.hp <= 0){
+    b.companion.hp = 0; b.companion.alive = false;
+    blog(` ¡El acompañante ${b.companion.label} fue derrotado!`);
+    if (b.target === 'comp') b.target = 'foe';
+  }
+  if (b.foe.hp < 0) b.foe.hp = 0;
+  if (b.foe.hp <= 0 && b.companion && b.companion.alive){ b.target = 'comp'; }
+  const foeDown = b.foe.hp <= 0; const compDown = !b.companion || !b.companion.alive;
+  if (foeDown && compDown){
+    b.foe.hp = 0; b.over = true; b.win = true; blog(` ¡${b.foe.label} derrotado!`);
+    const db = b.foeInfo.deathBlast;
+    if(db){
+      blog(` ¡${b.foe.label} explota al morir! ${db} de daño a TODO el equipo.`);
+      sfxBoomBig(); shakeEl(null, 22, 650);
+      b.units.forEach(x=>{ if(x.alive){ x.hp -= db; if(x.hp<=0){ x.hp=0; x.alive=false; } } });
+    }
+    sfxVictory();
+  }
+  if (u.hp <= 0){ u.hp = 0; u.alive = false; blog(` ${u.label} se debilitó.`); }
+}
+// Avanza al siguiente jugador; tras el último corre el turno del enemigo
+function advanceGroupTurn(){
+  const b = battle;
+  if (b.over){ renderBattle(); return; }
+  if (b.units.every(x=>!x.alive)){ b.over=true; b.win=false; blog(` Todas las unidades del grupo cayeron…`); renderBattle(); return; }
+  let guard = 0;
+  while (guard++ < (b.players.length + 2)){
+    b.phaseIdx++;
+    if (b.phaseIdx >= b.players.length){
+      b.phaseIdx = -1; b.turnOwner = 'enemy';
+      renderBattle();
+      setTimeout(groupEnemyTurn, 550);
+      return;
+    }
+    const pid = b.players[b.phaseIdx].id;
+    if (b.units.some(x=>x.ownerId===pid && x.alive)){
+      const ai = b.activeByOwner[pid];
+      if (!(b.units[ai] && b.units[ai].ownerId===pid && b.units[ai].alive)){
+        b.activeByOwner[pid] = b.units.findIndex(x=>x.ownerId===pid && x.alive);
+      }
+      b.turnOwner = pid;
+      blog(` Turno de ${ (b.players.find(p=>p.id===pid)||{}).name || 'Jugador' }.`);
+      renderBattle();
+      return;
+    }
+  }
+  b.phaseIdx = -1; b.turnOwner = 'enemy'; renderBattle(); setTimeout(groupEnemyTurn, 550);
+}
+// Turno del enemigo en batalla de grupo (ataca a unidades al azar del grupo)
+function groupEnemyTurn(){
+  const b = battle; if (!b || b.over){ if(b) renderBattle(); return; }
+  // El Boro se cura si está muy herido
+  if (b.companion !== undefined && b.foe.hp > 0 && b.foe.hp <= 10){
+    const cands = [{label:b.foe.label, o:b.foe}];
+    if (b.companion && b.companion.alive) cands.push({label:b.companion.label, o:b.companion});
+    const pick = cands[Math.floor(Math.random()*cands.length)]; pick.o.hp = pick.o.max;
+    blog(` ¡El ${b.foe.label} sana a ${pick.label} a vida completa!`); sfxBonus();
+  }
+  const fa = b.foeInfo.foeAbility;
+  if (fa && fa.type==='aoe' && Math.random() < fa.chance){
+    blog(`${fa.icon} ¡${b.foe.label} provoca ${fa.name}! ${fa.dmg} a TODO el equipo.`);
+    sfxBoomSmall(); shakeEl();
+    b.units.forEach(x=>{ if(x.alive){ if(x.immuneTurns>0){ blog(` ${x.label} es inmune. (0)`); } else { x.hp-=fa.dmg; if(x.hp<=0){ x.hp=0; x.alive=false; blog(` ${x.label} cayó por la explosión.`); } } } });
+  } else {
+    const foes = [];
+    if (b.foe.hp > 0) foes.push({label:b.foe.label, atk:b.foe.atk});
+    if (b.companion && b.companion.alive) foes.push({label:b.companion.label, atk:b.companion.atk});
+    let attackers;
+    if (b.companion !== undefined){ attackers = foes.filter(()=>Math.random()<0.7); if(!attackers.length && foes.length) attackers=[foes[Math.floor(Math.random()*foes.length)]]; }
+    else attackers = foes;
+    attackers.forEach(a => {
+      const alive = b.units.filter(x=>x.alive); if(!alive.length) return;
+      const tgt = alive[Math.floor(Math.random()*alive.length)];
+      if (tgt.immuneTurns>0){ blog(` ¡Neutralizado! ${tgt.label} es inmune al ataque de ${a.label}. (0)`); return; }
+      if (Math.random() < tgt.dodge){ blog(`${a.label} ataca a ${tgt.label}…  ¡esquivó! (0)`); return; }
+      tgt.hp -= a.atk; blog(`${a.label} ataca → ${a.atk} de daño a ${tgt.label}.`); sfxHit(); shakeEl();
+      if (tgt.hp<=0){ tgt.hp=0; tgt.alive=false; blog(` ${tgt.label} cayó…`); }
+    });
+  }
+  b.units.forEach(x=>{ if(x.immuneTurns>0) x.immuneTurns--; });
+  if (b.units.every(x=>!x.alive)){ b.over=true; b.win=false; blog(` Todas las unidades del grupo cayeron…`); renderBattle(); return; }
+  b.turn++;
+  b.phaseIdx = -1;
+  advanceGroupTurn();
+}
+// Vista de la batalla de grupo (por turnos rotando por jugador)
+function renderGroupBattle(){
+  const b = battle;
+  const me = myActiveUnit();
+  const canAct = isMyGroupTurn() && me && me.alive;
+  const turnTxt = b.over ? '' : (b.turnOwner === myId ? ' — ¡Es TU turno!' : ` — Turno de ${ownerName(b.turnOwner)}`);
+  const hPct = Math.max(0, b.foe.hp / b.foe.max * 100);
+  // Panel de mi unidad activa
+  let mePanel;
+  if (me){
+    const pPct = Math.min(100, Math.max(0, me.hp / me.max * 100));
+    const cab = COMBATANTS[me.key] ? COMBATANTS[me.key].ability : (me.ability||{icon:'',name:'',every:1});
+    const meVisual = me.key === 'proton'
+      ? `<img src="${avatarDataURL(me.avatar||state.avatar,3)}" style="width:64px;height:64px;background:#0a0e28;border-radius:8px;margin:6px 0;">`
+      : (unitBall(me.key,64) ? `<div style="display:flex;justify-content:center;margin:6px 0;">${unitBall(me.key,64)}</div>`
+        : `<div style="width:64px;height:64px;border-radius:12px;margin:6px auto;background:#0a0e28;display:flex;align-items:center;justify-content:center;font-size:1.8rem;">${me.icon}</div>`);
+    mePanel = `<p><b>${me.icon} ${me.label.toUpperCase()}</b></p>${meVisual}
+      <div style="background:#300;border-radius:8px;overflow:hidden;height:14px;"><div style="height:100%;width:${pPct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
+      <p class="muted"> ${Math.max(0,me.hp)}/${me.max}</p>`;
+  } else {
+    mePanel = `<p class="muted">Todas tus unidades cayeron.</p>`;
+  }
+  // Botones de cambio (solo tus unidades vivas, solo en tu turno)
+  const myIdx = (b.activeByOwner ? b.activeByOwner[myId] : -1);
+  const switchBtns = b.units.map((x,i)=> (x.ownerId===myId && i!==myIdx) ?
+    `<button class="btn ghost" ${(!x.alive||!canAct)?'disabled':''} onclick="switchUnit(${i})"> ${x.icon} ${x.label} ${x.alive?`${Math.max(0,x.hp)}`:'✕'}</button>` : ''
+  ).join('');
+  // Lista de todo el equipo (todas las unidades de todos los jugadores)
+  const roster = b.units.map(x=>{
+    const dead = !x.alive; const mine = x.ownerId===myId;
+    const isTurnUnit = (b.activeByOwner && b.activeByOwner[x.ownerId]===b.units.indexOf(x) && b.turnOwner===x.ownerId);
+    const bd = isTurnUnit ? 'border:1px solid var(--gold);' : 'border:1px solid var(--panel2);';
+    return `<div style="${bd}${dead?'opacity:.4;':''}border-radius:6px;padding:3px 6px;font-size:.7rem;${mine?'background:#0a1030;':''}">${x.icon} ${x.label} ${dead?'✕':Math.max(0,x.hp)+'/'+x.max}</div>`;
+  }).join('');
+  // Acción
+  let actionRow;
+  if (b.over){
+    if (groupBattle && groupBattle.host){ actionRow = `<button class="btn" onclick="endGroupBattleHost()">Continuar</button>`; }
+    else { actionRow = `<p class="muted">Batalla terminada. Esperando al anfitrión…</p>`; }
+  } else if (canAct){
+    const cab = COMBATANTS[me.key] ? COMBATANTS[me.key].ability : me.ability;
+    const ready = me.abilityReady;
+    const cd = cab.every - (me.actCount % cab.every);
+    const abLabel = ready ? `${cab.icon} ${cab.name}` : `${cab.icon} ${cab.name} ${cd}`;
+    actionRow = `<button class="btn" onclick="pAct('attack')"> Ataque [1]</button>
+      <button class="btn alt" ${ready?'':'disabled'} onclick="pAct('ability')">${abLabel} [2]</button>`;
+  } else {
+    actionRow = `<p class="muted"> Turno de ${ownerName(b.turnOwner)}… espera tu turno.</p>`;
+  }
+  openModal(`
+    <h2 style="text-align:center;"> Batalla de grupo — Ronda ${b.turn}${turnTxt}</h2>
+    <div class="row" style="justify-content:space-between; align-items:flex-start;">
+      <div class="card" style="flex:1; text-align:center;">
+        <p class="muted" style="font-size:.66rem;">TU UNIDAD</p>
+        ${mePanel}
+        ${switchBtns? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"><p class="muted" style="font-size:.66rem;">Cambiar unidad:</p>${switchBtns}</div>` : ''}
+      </div>
+      <div style="align-self:center; font-size:1.4rem;">VS</div>
+      <div class="card" style="flex:1; text-align:center;">
+        ${b.companion ? `
+        <div class="row" style="gap:8px; align-items:stretch; justify-content:center;">
+          ${foeBox(b.foe, b.foeInfo, {selected:(b.target!=='comp'), tkey:'foe', over:b.over, spectator:!canAct})}
+          ${foeBox(b.companion, b.foeInfo, {selected:(b.target==='comp'), tkey:'comp', over:b.over, spectator:!canAct})}
+        </div>` : `
+        <p><b>${b.foe.icon} ${b.foe.label.toUpperCase()}</b></p>
+        <div style="width:70px;height:70px;border-radius:50%;margin:8px auto;background:${b.foeInfo.gradient};display:flex;align-items:center;justify-content:center;font-weight:800;color:${b.foeInfo.textColor};">${b.foeInfo.letter}</div>
+        <div style="background:#003;border-radius:8px;overflow:hidden;height:14px;"><div style="height:100%;width:${hPct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
+        <p class="muted"> ${Math.max(0,b.foe.hp)}/${b.foe.max}</p>`}
+      </div>
+    </div>
+    <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:5px; justify-content:center;">${roster}</div>
+    <div id="log" style="margin-top:12px;">${b.log.map(l => `<div>${l}</div>`).join('')}</div>
+    <div class="row" style="justify-content:center; margin-top:12px;">
+      ${actionRow}
+    </div>`);
+  const lg = document.getElementById('log'); if (lg) lg.scrollTop = lg.scrollHeight;
+  broadcastBattle();
 }
 function startGroupBattle(d){
   closeModal();
@@ -1633,21 +2115,40 @@ function startGroupBattle(d){
         const c = COMBATANTS[key]; if (!c) return;
         units.push({ key, label:(m.name? m.name+': ' : '')+c.label, icon:c.icon, hp:c.hp, max:c.hp,
           atk:c.atk, dodge:c.dodge, ability:c.ability, actCount:0, abilityReady:false, alive:true,
-          negateNext:false, avatar:(key==='proton'? (m.avatar||null) : null) });
+          negateNext:false, immuneTurns:0, ownerId:m.id, ownerName:m.name||'', avatar:(key==='proton'? (m.avatar||null) : null) });
       });
     });
     if (units.length === 0){
       const c = COMBATANTS.proton;
-      units = [{ key:'proton', label:c.label, icon:c.icon, hp:c.hp, max:c.hp, atk:c.atk, dodge:c.dodge, ability:c.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, avatar:state.avatar }];
+      units = [{ key:'proton', label:c.label, icon:c.icon, hp:c.hp, max:c.hp, atk:c.atk, dodge:c.dodge, ability:c.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0, ownerId:d.hostId, ownerName:'', avatar:state.avatar }];
     }
+    // Orden de jugadores: el anfitrión primero, luego el resto en orden de llegada
+    const players = [];
+    const seenP = {};
+    const hostName = ((d.members||[]).find(m=>m.id===d.hostId)||{}).name || 'Anfitrión';
+    players.push({ id:d.hostId, name:hostName }); seenP[d.hostId]=1;
+    (d.members||[]).forEach(m => { if(!seenP[m.id]){ players.push({ id:m.id, name:m.name||'Jugador' }); seenP[m.id]=1; } });
+    // índice de la unidad activa por jugador (primera viva de cada dueño)
+    const activeByOwner = {};
+    players.forEach(p => { const i = units.findIndex(u=>u.ownerId===p.id && u.alive); activeByOwner[p.id] = (i<0?0:i); });
     const fhp = f.hp * size;
     const names = (d.members||[]).map(m => m.name).join(', ');
     battle = {
       foeType, foeInfo:f, units, active:0,
       foe:{ hp:fhp, max:fhp, atk:f.atk, dodge:f.dodge, label:f.label, icon:f.icon },
       turn:1, over:false, win:false, group:true,
+      players, phaseIdx:0, turnOwner:players[0].id, activeByOwner, target:'foe',
       log:[` ¡Un ${f.label} salvaje (×${size}) apareció! El grupo (${names}) lo enfrenta juntos.`]
     };
+    if (f.companion){
+      const pool = ['hydrogen','helium','lithium'];
+      const ck = pool[Math.floor(Math.random()*pool.length)];
+      const cf = WILD_FOES[ck];
+      battle.companion = { hp:cf.hp, max:cf.hp, atk:cf.atk, dodge:cf.dodge, label:cf.label,
+        letter:cf.letter, gradient:cf.gradient, textColor:cf.textColor, icon:cf.icon, alive:true };
+      blog(` El ${f.label} viene acompañado de un ${cf.label} ${cf.letter}. ¡Dos enemigos!`);
+    }
+    blog(` Turno de ${players[0].name}.`);
     renderBattle();
     broadcastBattle();
   } else {
@@ -1663,8 +2164,14 @@ function applyGroupBattleSync(d){
   battle = {
     foeType, foeInfo:f, units:s.units, active:s.active,
     foe:{ hp:s.foe.hp, max:s.foe.max, atk:f.atk, dodge:f.dodge, label:s.foe.label, icon:s.foe.icon },
-    turn:s.turn, over:s.over, win:s.win, group:true, spectator:true, log:s.log
+    companion: s.companion ? Object.assign({}, s.companion) : undefined,
+    target: s.target || 'foe',
+    turn:s.turn, over:s.over, win:s.win, group:true,
+    players: s.players || [], turnOwner: s.turnOwner || null,
+    phaseIdx: s.phaseIdx, activeByOwner: s.activeByOwner || {},
+    log:s.log
   };
+  battleActive = true;
   renderBattle();
 }
 function endGroupBattleHost(){
@@ -1699,8 +2206,10 @@ function openInventory(){
   const canHelium  = state.protons >= 2 && state.neutrons >= 2 && state.electrons >= 2;
   const lvl4       = getLevel() >= 4;
   const canLithium = lvl4 && state.protons >= 3 && state.neutrons >= 4 && state.electrons >= 3;
+  const lvl5       = getLevel() >= 5;
+  const canBeryllium = lvl5 && state.protons >= 4 && state.neutrons >= 5 && state.electrons >= 4;
   // Tarjetas equipables (protones, neutrones, electrones y átomos que tengas)
-  const equipCards = ['proton','neutron','electron','hydrogen','helium','lithium'].filter(key => ownedCount(key) >= 1).map(key => {
+  const equipCards = ['proton','neutron','electron','hydrogen','helium','lithium','beryllium'].filter(key => ownedCount(key) >= 1).map(key => {
     const c = COMBATANTS[key];
     const n = ownedCount(key);
     const inParty = Array.isArray(state.party) && state.party.includes(key);
@@ -1709,7 +2218,7 @@ function openInventory(){
     return `<div class="card" style="flex:1; min-width:130px; text-align:center; background:#0a0e28; ${border}cursor:pointer;" onclick="toggleParty('${key}')">
       <div style="height:40px;display:flex;align-items:center;justify-content:center;">${unitBall(key,36) || `<span style="font-size:1.8rem;">${c.icon}</span>`}</div>
       <p><b>${c.label}</b> ×${n}</p>
-      <p style="font-size:.72rem; margin-top:2px; color:var(--muted);">${c.hp} · ${c.atk} · ${c.ability.icon}${(c.ability.immune||c.ability.healAll)?`${c.ability.name}/${c.ability.every}t`:`${c.ability.dmg}/${c.ability.every}t`}</p>
+      <p style="font-size:.72rem; margin-top:2px; color:var(--muted);">${c.hp} · ${c.atk} · ${c.ability.icon}${(c.ability.immune||c.ability.healAll||c.ability.fission)?`${c.ability.name}/${c.ability.every}t`:`${c.ability.dmg}/${c.ability.every}t`}</p>
       <p style="font-size:.8rem; margin-top:4px; color:${inParty?'var(--gold)':'var(--muted)'};">${inParty?` Equipo #${slot}`:'Click para añadir'}</p>
     </div>`;
   }).join('') || '<p class="muted">Aún no posees combatientes.</p>';
@@ -1748,6 +2257,7 @@ function openInventory(){
         ${state.atoms.hydrogen>0?`<p> Hidrógeno: <b>${state.atoms.hydrogen}</b></p>`:''}
         ${state.atoms.helium>0?`<p> Helio: <b>${state.atoms.helium}</b></p>`:''}
         ${state.atoms.lithium>0?`<p> Litio: <b>${state.atoms.lithium}</b></p>`:''}
+        ${state.atoms.beryllium>0?`<p> Berilio: <b>${state.atoms.beryllium}</b></p>`:''}
         ${(state.luckPotions||0)>0?`<p> Poción de suerte x2: <b>${state.luckPotions}</b></p>`:''}
         ${luckActive()?`<p style="color:#7ad67f;"> Suerte x2 activa: <b>${luckRemainStr()}</b></p>`:''}
         ${(state.luckPotions||0)>0?`<button class="btn alt" style="margin-top:8px;" onclick="useLuckPotion()">Usar poción de suerte (+5:00)</button>`:''}
@@ -1782,6 +2292,12 @@ function openInventory(){
           <p class="muted" style="font-size:.72rem;">3 Protones + 4 Neutrones + 3 Electrones</p>
           ${lvl4 ? `<button class="btn alt" style="margin-top:8px;" ${canLithium?'':'disabled'} onclick="makeAtom('lithium')">Crear átomo</button>` : `<p class="gold" style="font-size:.72rem; margin-top:6px;">Alcanza el Nivel 4 para fabricar Litio.</p>`}
         </div>
+        <div class="card" style="margin-top:10px; background:#0a0e28;">
+          <p><b> Berilio</b> <span class="muted" style="font-size:.7rem;">(Nivel 5)</span></p>
+          <p class="muted" style="font-size:.72rem;">4 Protones + 5 Neutrones + 4 Electrones</p>
+          <p class="muted" style="font-size:.68rem;">40 HP · 20 ataque · Fisión c/5t: 80 a enemigos, 10 a todo el equipo, luego se divide en 2 Helios a media vida</p>
+          ${lvl5 ? `<button class="btn alt" style="margin-top:8px;" ${canBeryllium?'':'disabled'} onclick="makeAtom('beryllium')">Crear átomo</button>` : `<p class="gold" style="font-size:.72rem; margin-top:6px;">Alcanza el Nivel 5 (400 EXP) para fabricar Berilio.</p>`}
+        </div>
       </div>
 
     </div>
@@ -1815,6 +2331,12 @@ function makeAtom(kind){
     state.protons -= 3; state.neutrons -= 4; state.electrons -= 3;
     if (state.atoms.lithium == null) state.atoms.lithium = 0;
     state.atoms.lithium += 1;
+  } else if (kind === 'beryllium'){
+    if (getLevel() < 5) return;
+    if (state.protons < 4 || state.neutrons < 5 || state.electrons < 4) return;
+    state.protons -= 4; state.neutrons -= 5; state.electrons -= 4;
+    if (state.atoms.beryllium == null) state.atoms.beryllium = 0;
+    state.atoms.beryllium += 1;
   }
   if (inWorld) sendStats();
   openInventory();
@@ -1880,6 +2402,7 @@ function applyAccount(d, n){
   state.atoms = d.atoms || { hydrogen:0, helium:0 };
   if (state.atoms.helium == null) state.atoms.helium = 0;
   if (state.atoms.lithium == null) state.atoms.lithium = 0;
+  if (state.atoms.beryllium == null) state.atoms.beryllium = 0;
   state.equipped = d.equipped && COMBATANTS[d.equipped] ? d.equipped : 'proton';
   state.party = Array.isArray(d.party) ? d.party.filter(k=>COMBATANTS[k]) : (d.equipped && COMBATANTS[d.equipped] ? [d.equipped] : ['proton']);
   state.exp = (typeof d.exp === 'number') ? d.exp : (d.rewards ? (d.rewards.exp || 0) : 0);
@@ -2216,8 +2739,8 @@ function renderPvpBattle(){
     <div id="log" style="margin-top:12px;">${b.log.map(l => `<div>${l}</div>`).join('')}</div>
     <div class="row" style="justify-content:center; margin-top:14px;">
       ${b.over ? `<button class="btn alt" onclick="pvpRematch()"> Revancha</button> <button class="btn" onclick="endPvpBattle()"> Volver al mundo</button>` : `
-        <button class="btn" ${canAttack ? '' : 'disabled'} onclick="pvpAct('attack')"> Ataque</button>
-        <button class="btn alt" ${canAbility ? '' : 'disabled'} onclick="pvpAct('ability')">${b.me.ability.icon} ${b.me.ability.name} ${canAbility ? '' : ''}</button>`}
+        <button class="btn" ${canAttack ? '' : 'disabled'} onclick="pvpAct('attack')"> Ataque [1]</button>
+        <button class="btn alt" ${canAbility ? '' : 'disabled'} onclick="pvpAct('ability')">${b.me.ability.icon} ${b.me.ability.name} [2] ${canAbility ? '' : ''}</button>`}
     </div>`);
   const lg = document.getElementById('log'); if (lg) lg.scrollTop = lg.scrollHeight;
 }

@@ -420,6 +420,13 @@ io.on('connection', (socket) => {
     groupMembers(gid).forEach(id => { if (id !== socket.id) io.to(id).emit('group-battle-sync', data); });
   });
 
+  // Un miembro (no anfitrión) envía su acción; se reenvía al anfitrión que simula
+  socket.on('group-battle-act', (data) => {
+    const hostId = inGroupBattle.get(socket.id);
+    if (!hostId || hostId === socket.id) return;
+    io.to(hostId).emit('group-battle-act', { from: socket.id, action: (data && data.action) || data });
+  });
+
   socket.on('group-battle-end', (data) => {
     const hostId = socket.id;
     const affected = [];
