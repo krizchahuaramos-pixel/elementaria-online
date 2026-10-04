@@ -96,6 +96,12 @@ function getLevel(){
   while ((state.exp||0) >= expForLevel(lvl + 1)) lvl++;
   return lvl;
 }
+// Nivel a partir de una cantidad de EXP cualquiera (para la clasificación).
+function levelFromExp(exp){
+  let lvl = 1;
+  while ((exp||0) >= expForLevel(lvl + 1)) lvl++;
+  return lvl;
+}
 function maxParty(){ const l = getLevel(); return l >= 3 ? 3 : (l >= 2 ? 2 : 1); }
 function luckActive(){ return Date.now() < (state.luckUntil||0); }
 function luckMul(){ return luckActive() ? 2 : 1; }
@@ -205,6 +211,7 @@ function showButtonGuide(){
       <div class="card" style="background:#0a0e28;"> <b>1vs1 (P)</b> — reta a otro jugador conectado a un duelo.</div>
       <div class="card" style="background:#0a0e28;"> <b>Intercambio (I)</b> — intercambia objetos con el jugador seleccionado.</div>
       <div class="card" style="background:#0a0e28;"> <b>Grupo (J)</b> — selecciona a un jugador (clic en el mapa) y pulsa J para invitarlo a tu grupo (máx 3). En grupo peleais juntos: si uno entra en batalla, entran todos, y el enemigo es más fuerte.</div>
+      <div class="card" style="background:#0a0e28;"> <b>Baneo (Y)</b> — selecciona a un jugador (clic en el mapa) y pulsa Y para proponer su baneo. Todos votan; si gana, va 5 min a la cárcel. Solo puedes iniciar un baneo cada 1 hora.</div>
       <div class="card" style="background:#0a0e28;"> <b>Batalla: SÍ/NO</b> — con <b>NO</b> caminas sin peleas; con <b>SÍ</b> pueden aparecer enemigos salvajes.</div>
       <div class="card" style="background:#0a0e28;"> <b>Guardar (G)</b> — guarda tu progreso.</div>
       <div class="card" style="background:#0a0e28;"> <b>Soltar Q (Q)</b> — deja monedas Q en el suelo.</div>
@@ -233,8 +240,23 @@ socket.on('player-left', (d) => { delete others[d.id]; if (d.id === tradeSelecte
 socket.on('player-emote', (d) => {
   if (others[d.id]) { others[d.id].emote = d.text; others[d.id].emoteT = Date.now(); }
 });
-socket.on('chat-message', (d) => { addChatLine(d); });
+socket.on('chat-message', (d) => {
+  addChatLine(d);
+  // Mostrar también un globo de texto sobre el personaje que habla
+  if (d && d.text){
+    const txt = String(d.text).slice(0, 120);
+    if (d.id && d.id === myId){ me.bubble = txt; me.bubbleT = Date.now(); }
+    else if (d.id && others[d.id]){ others[d.id].bubble = txt; others[d.id].bubbleT = Date.now(); }
+  }
+});
 socket.on('leaderboard', (list) => { leaderboardData = Array.isArray(list) ? list : []; renderLeaderboard(); });
+socket.on('join-ok', () => { reallyEnterWorld(); });
+socket.on('name-taken', (d) => {
+  const nm = (d && d.name) ? d.name : (state.name || '');
+  alert(`Ya existe un jugador con el nombre “${nm}”. Elige otro nombre.`);
+  inWorld = false;
+  sceneCreator();
+});
 
 /* ---------- Monedas Q soltadas en el campo ---------- */
 let worldCoins = {};   // id -> { id, tx, ty, amount }
@@ -255,7 +277,7 @@ socket.on('coin-picked', (d) => {
   }
 });
 function sendStats(){
-  socket.emit('stats', { electrons: state.electrons, Q: state.Q, wins: state.wins });
+  socket.emit('stats', { electrons: state.electrons, Q: state.Q, wins: state.wins, exp: state.exp });
 }
 
 /* =================================================
@@ -270,7 +292,128 @@ function audioCtx(){
   }catch(e){ return null; }
   return _actx;
 }
-// Sonido de "corte" (slash): ráfaga de ruido con barrido descendente
+/* ===== MÚSICA AMBIENTAL DEL CAMPO — espacial e inmensa, bucle de 5:00 =====
+   Generada en tiempo real con Web Audio (sin archivos). La progresión de
+   acordes dura 5 minutos y, al terminar, vuelve a empezar como un bucle. */
+let _amb = null;
+let ambientEnabled = true;
+const AMB_CHORD_DUR = 50;        // s por acorde (6 acordes = 300 s = 5:00)
+function _mtof(m){ return 440 * Math.pow(2, (m - 69) / 12); }
+const AMB_CHORDS = [
+  [33, 45, 52, 64, 69],
+  [29, 41, 48, 60, 65],
+  [36, 48, 55, 67, 72],
+  [31, 43, 50, 62, 67],
+  [26, 38, 45, 57, 62],
+  [28, 40, 47, 59, 64]
+].map(ch => ch.map(_mtof));
+function _makeReverbIR(ac, seconds, decay){
+  const rate = ac.sampleRate, len = Math.floor(rate * seconds);
+  const buf = ac.createBuffer(2, len, rate);
+  for(let ch=0; ch<2; ch++){ const d = buf.getChannelData(ch); for(let i=0;i<len;i++){ d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, decay); } }
+  return buf;
+}
+function ambientStart(){
+  if(!ambientEnabled) return;
+  if(_amb) return;
+  const ac = audioCtx(); if(!ac) return;
+  const t0 = ac.currentTime;
+  const master = ac.createGain(); master.gain.setValueAtTime(0.0001, t0);
+  master.gain.exponentialRampToValueAtTime(0.7, t0 + 3);
+  const dry = ac.createGain(); dry.gain.value = 0.55;
+  const wet = ac.createGain(); wet.gain.value = 0.95;
+  const rev = ac.createConvolver(); rev.buffer = _makeReverbIR(ac, 6, 3);
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 850; lp.Q.value = 0.4;
+  lp.connect(dry); dry.connect(master);
+  lp.connect(rev); rev.connect(wet); wet.connect(master);
+  master.connect(ac.destination);
+  const lfo = ac.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 1/45;
+  const lfoG = ac.createGain(); lfoG.gain.value = 450;
+  lfo.connect(lfoG); lfoG.connect(lp.frequency); lfo.start(t0);
+  _amb = { ac, master, lp, rev, wet, dry, lfo, timers: [] };
+  _ambScheduleChords();
+  _ambScheduleShimmer();
+}
+function _ambPlayPad(freqs, when, dur){
+  if(!_amb) return; const ac = _amb.ac, dest = _amb.lp;
+  freqs.forEach(f => {
+    [ ['sine', 0], ['triangle', 6], ['triangle', -6] ].forEach(([type, det]) => {
+      const o = ac.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = det;
+      const g = ac.createGain();
+      const peak = 0.20 / freqs.length / (det ? 2.2 : 1);
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(peak, when + 6);
+      g.gain.setValueAtTime(peak, when + dur - 9);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+      o.connect(g); g.connect(dest);
+      o.start(when); o.stop(when + dur + 0.2);
+    });
+  });
+}
+function _ambScheduleChords(){
+  if(!_amb) return; let idx = 0;
+  const step = () => {
+    if(!_amb) return;
+    _ambPlayPad(AMB_CHORDS[idx % AMB_CHORDS.length], _amb.ac.currentTime, AMB_CHORD_DUR + 6);
+    idx++;
+    _amb.timers.push(setTimeout(step, AMB_CHORD_DUR * 1000));
+  };
+  step();
+}
+function _ambScheduleShimmer(){
+  if(!_amb) return;
+  const step = () => {
+    if(!_amb) return;
+    const ac = _amb.ac, t = ac.currentTime;
+    const scale = [0,2,4,7,9];
+    const m = 72 + scale[Math.floor(Math.random()*scale.length)] + (Math.random()<0.4 ? 12 : 0);
+    const o = ac.createOscillator(); o.type = 'sine'; o.frequency.value = _mtof(m);
+    const g = ac.createGain(); const peak = 0.05;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 1.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 6);
+    o.connect(g); g.connect(_amb.rev); g.connect(_amb.dry);
+    o.start(t); o.stop(t + 6.3);
+    _amb.timers.push(setTimeout(step, 4000 + Math.random()*7000));
+  };
+  _amb.timers.push(setTimeout(step, 3000));
+}
+function ambientStop(){
+  if(!_amb) return;
+  const dead = _amb; _amb = null;
+  const t = dead.ac.currentTime;
+  try{ dead.master.gain.cancelScheduledValues(t); dead.master.gain.setValueAtTime(dead.master.gain.value, t); dead.master.gain.exponentialRampToValueAtTime(0.0001, t + 1.5); }catch(e){}
+  dead.timers.forEach(id => clearTimeout(id));
+  setTimeout(() => { try{ dead.lfo.stop(); }catch(e){} try{ dead.master.disconnect(); }catch(e){} }, 1900);
+}
+function toggleAmbient(){
+  ambientEnabled = !ambientEnabled;
+  if(ambientEnabled){ if(inWorld && !battleActive) ambientStart(); if(typeof toast==='function') toast('Música: activada'); }
+  else { ambientStop(); if(typeof toast==='function') toast('Música: silenciada'); }
+}
+/* Desbloqueo de audio: los navegadores no dejan sonar hasta que el usuario
+   interactúa. Al primer clic o tecla reanudamos el audio y, si ya estamos
+   en el mundo, arrancamos la música. */
+let _audioPrimed = false;
+function _primeAudioBuffers(ac){
+  // Reproduce un buffer silencioso durante el primer gesto para desbloquear
+  // el audio basado en BufferSource (sonidos de ataque, daño y explosiones).
+  try{
+    const b = ac.createBuffer(1, 1, ac.sampleRate);
+    const s = ac.createBufferSource(); s.buffer = b;
+    s.connect(ac.destination); s.start(0);
+  }catch(e){}
+}
+function _unlockAudio(){
+  const ac = audioCtx(); if(!ac) return;
+  if(ac.state === 'suspended'){ try{ ac.resume(); }catch(e){} }
+  if(!_audioPrimed){ _primeAudioBuffers(ac); _audioPrimed = true; }
+  if(ambientEnabled && inWorld && !battleActive && !_amb) ambientStart();
+}
+document.addEventListener('pointerdown', _unlockAudio);
+document.addEventListener('keydown', _unlockAudio);
+document.addEventListener('touchstart', _unlockAudio, { passive:true });
+document.addEventListener('click', _unlockAudio);
 function sfxSlash(){
   const ac = audioCtx(); if(!ac) return;
   const t = ac.currentTime;
@@ -465,6 +608,20 @@ socket.on('group-battle-sync',  (d) => applyGroupBattleSync(d));
 socket.on('group-battle-act',   (d) => { if (d) applyGroupAction(d.from, d.action); });
 socket.on('group-battle-end',   (d) => endGroupBattleRemote(d));
 
+/* ---------- BANEO (votación entre jugadores) ---------- */
+let banTargetId  = null;   // a quién propongo banear (clic en el mapa)
+let banVoteState = null;   // encuesta activa recibida del servidor
+let banVoteTimer = null;   // cuenta atrás de la encuesta
+let jailActive   = false;  // estoy en la cárcel
+let jailUntil    = 0;      // timestamp de salida
+let jailTimer    = null;   // intervalo del cronómetro
+socket.on('ban-error',   (d) => toast('✗ ' + ((d && d.msg) || 'No se pudo iniciar el baneo.')));
+socket.on('ban-vote',    (d) => showBanVote(d));
+socket.on('ban-result',  (d) => showBanResult(d));
+socket.on('ban-warning', (d) => showBanWarning(d));
+socket.on('jailed',      (d) => enterJail(d));
+socket.on('ban-cancel',  () => { closeBanVote(); toast('La votación de baneo se canceló.'); });
+
 function sendTradeInvite(id){
   if (!inWorld || battleActive || trade) return;
   if (Date.now() < tradeCooldownUntil){ toast(' Espera un momento antes de proponer otro intercambio.'); return; }
@@ -476,7 +633,7 @@ function showTradeInvitePrompt(d){
   tradeInviteFrom = d;
   openModal(`
     <h2 style="text-align:center;"> ${escapeHtml(d.fromName || 'Un jugador')} quiere intercambiar contigo</h2>
-    <p class="muted" style="text-align:center; margin-top:8px;">Cada uno podrá ofrecer hasta 5 objetos. El intercambio solo se realiza si ambos aceptan.</p>
+    <p class="muted" style="text-align:center; margin-top:8px;">Cada uno podrá ofrecer hasta 15 objetos. El intercambio solo se realiza si ambos aceptan.</p>
     <p style="text-align:center; margin-top:6px;" id="tinvtimer" class="gold">Responde en 30s…</p>
     <div class="row" style="justify-content:center; margin-top:14px; gap:12px;">
       <button class="btn" onclick="acceptTrade()"> Aceptar</button>
@@ -507,13 +664,14 @@ function startTrade(d){
     theyConfirmed: false
   };
   battleActive = true; // bloquea movimiento y encuentros mientras dura
+  ambientStop();
   renderTrade();
 }
-function endTrade(){ trade = null; battleActive = false; clearTradeInvite(); closeModal(); tradeSelectedId = null; refreshHUD(); }
+function endTrade(){ trade = null; battleActive = false; clearTradeInvite(); closeModal(); tradeSelectedId = null; refreshHUD(); if (inWorld) ambientStart(); }
 function tradeAdd(key){
   const t = trade; if (!t) return;
   const it = TRADE_ITEMS.find(i => i.key === key); if (!it) return;
-  if (offerTotal(t.myOffer) >= 5) return;
+  if (offerTotal(t.myOffer) >= 15) return;
   if (it.get() - (t.myOffer[key] || 0) <= 0) return;
   t.myOffer[key] = (t.myOffer[key] || 0) + 1;
   sendMyOffer();
@@ -589,7 +747,7 @@ function renderTrade(){
       <span class="row" style="gap:6px;">
         <button class="btn ghost" style="padding:2px 10px;" ${inOffer <= 0 ? 'disabled' : ''} onclick="tradeRemove('${it.key}')">−</button>
         <b style="min-width:18px; text-align:center;">${inOffer}</b>
-        <button class="btn ghost" style="padding:2px 10px;" ${(avail <= 0 || myTotal >= 5) ? 'disabled' : ''} onclick="tradeAdd('${it.key}')">＋</button>
+        <button class="btn ghost" style="padding:2px 10px;" ${(avail <= 0 || myTotal >= 15) ? 'disabled' : ''} onclick="tradeAdd('${it.key}')">＋</button>
       </span>
     </div>`;
   }).join('');
@@ -597,10 +755,10 @@ function renderTrade(){
   const theirStatus = t.theyConfirmed ? '<span class="gold"> Aceptó</span>'   : '<span class="muted">Sin aceptar</span>';
   openModal(`
     <div class="row" style="justify-content:space-between;"><h2 style="margin:0;"> Intercambio con ${escapeHtml(t.partnerName)}</h2></div>
-    <p class="muted" style="margin-top:4px;">Ofrece hasta <b>5 objetos</b>. Si cambias tu oferta se reinician las aceptaciones. El trato se realiza solo cuando ambos aceptan.</p>
+    <p class="muted" style="margin-top:4px;">Ofrece hasta <b>15 objetos</b>. Si cambias tu oferta se reinician las aceptaciones. El trato se realiza solo cuando ambos aceptan.</p>
     <div class="row" style="margin-top:12px; gap:12px; align-items:stretch; flex-wrap:wrap;">
       <div class="card" style="flex:1; min-width:250px;">
-        <p style="color:var(--accent); margin:0;"><b> Tu oferta</b> <span class="muted">(${myTotal}/5)</span> — ${myStatus}</p>
+        <p style="color:var(--accent); margin:0;"><b> Tu oferta</b> <span class="muted">(${myTotal}/15)</span> — ${myStatus}</p>
         <p style="margin-top:6px;">${myOfferHtml}</p>
         <hr style="border:none; border-top:1px solid var(--panel2); margin:10px 0;">
         <p style="color:var(--accent); margin:0;"><b> Tu inventario</b> <span class="muted">(solo tú lo ves)</span></p>
@@ -621,6 +779,7 @@ function renderTrade(){
     </div>`);
 }
 function onWorldClick(e){
+  if (jailActive) return;
   if (!inWorld || battleActive || document.getElementById('modal')) return;
   const cv = e.currentTarget;
   const rect = cv.getBoundingClientRect();
@@ -633,7 +792,7 @@ function onWorldClick(e){
   if (hit){
     tradeSelectedId = hit;
     const nm = others[hit].name || hit.slice(0, 4);
-    toast(` Seleccionaste a ${nm}. Pulsa I para intercambiar (o P para retarlo).`);
+    toast(` Seleccionaste a ${nm}. Pulsa I para intercambiar, P para retarlo o Y para banearlo.`);
   } else {
     tradeSelectedId = null;
   }
@@ -782,14 +941,14 @@ function openWorldShop(){
 function buyQuarkWorld(t){
   if (state.Q < 5){ toast('Necesitas 5 Q para comprar.'); return; }
   state.Q -= 5; state.quarks[t] += 1;
-  socket.emit('stats', { electrons: state.electrons, Q: state.Q, wins: state.wins });
+  socket.emit('stats', { electrons: state.electrons, Q: state.Q, wins: state.wins, exp: state.exp });
   const c = document.getElementById('coins'); if (c) c.textContent = state.Q + ' Q';
   openWorldShop();
 }
 function buyLuckPotion(){
   if (state.Q < 100){ toast('Necesitas 100 Q para comprar.'); return; }
   state.Q -= 100; state.luckPotions = (state.luckPotions||0) + 1;
-  socket.emit('stats', { electrons: state.electrons, Q: state.Q, wins: state.wins });
+  socket.emit('stats', { electrons: state.electrons, Q: state.Q, wins: state.wins, exp: state.exp });
   const c = document.getElementById('coins'); if (c) c.textContent = state.Q + ' Q';
   openWorldShop();
 }
@@ -992,6 +1151,7 @@ function showEventTimer(){
   d.id='eventTimer';
   d.style.cssText='position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:80;background:rgba(6,10,24,.94);border:2px solid var(--gold);border-radius:14px;padding:8px 22px;text-align:center;box-shadow:0 6px 24px rgba(0,0,0,.55);pointer-events:none;';
   document.body.appendChild(d);
+  if (jailActive) d.style.display = 'none';   // oculto para quien está en la cárcel
   updateEventTimer();
   gameEvent.uiTimer=setInterval(updateEventTimer, 250);
 }
@@ -1008,6 +1168,7 @@ function startConfetti(){
   c.id='confetti'; c.style.cssText='position:fixed;inset:0;z-index:70;pointer-events:none;';
   c.width=window.innerWidth; c.height=window.innerHeight;
   document.body.appendChild(c); confettiCanvas=c;
+  if (jailActive) c.style.display='none';   // oculto para quien está en la cárcel
   const ctx=c.getContext('2d');
   const cols=['#ffd76a','#ff5a76','#4fd1ff','#7ad67f','#c79cff','#ff9d3b'];
   const parts=[];
@@ -1084,11 +1245,17 @@ function makeProton(){
    ENTRAR AL MUNDO COMPARTIDO
 ================================================= */
 function enterWorld(){
-  // Enviamos nuestro avatar al servidor: aparecemos para todos
-  socket.emit('join', { avatar: state.avatar, name: state.name, equipped: state.equipped, stats: { electrons: state.electrons, Q: state.Q, wins: state.wins } });
+  // Enviamos nuestro avatar al servidor: aparecemos para todos.
+  // No entramos al mundo hasta que el servidor confirme ('join-ok').
+  // Si el nombre ya está en uso, el servidor responde 'name-taken'.
+  socket.emit('join', { avatar: state.avatar, name: state.name, equipped: state.equipped, stats: { electrons: state.electrons, Q: state.Q, wins: state.wins, exp: state.exp } });
+}
+function reallyEnterWorld(){
+  if (inWorld) return;
   inWorld = true;
   startWorldLoop();
   sendLoadout();
+  ambientStart();
   if (showGuideOnEnter){ showGuideOnEnter = false; showButtonGuide(); }
 }
 /*__PART3__*/
@@ -1155,6 +1322,7 @@ function startWorldLoop(){
     worldStarted = true;
     document.addEventListener('keydown', (e) => {
       if (!inWorld) return;
+      if (jailActive){ e.preventDefault(); return; }   // en la cárcel todo está bloqueado
       const chatting = document.activeElement && document.activeElement.id === 'chatinput';
       if (chatting){
         if (e.key === 'Enter'){ e.preventDefault(); sendChat(); }
@@ -1164,6 +1332,7 @@ function startWorldLoop(){
       const typingField = document.activeElement && (document.activeElement.tagName==='INPUT' || document.activeElement.tagName==='TEXTAREA');
       if (typingField){ return; } // escribiendo en un campo (p. ej. contraseña del evento)
       if (e.key === 't' || e.key === 'T'){ e.preventDefault(); toggleChat(); return; }
+      if (e.key === 'm' || e.key === 'M'){ toggleAmbient(); return; }   // silenciar/activar música
       if (typeof pvp !== 'undefined' && pvp && !pvp.over){
         if (e.key === '1'){ e.preventDefault(); pvpAct('attack'); return; }
         if (e.key === '2'){ e.preventDefault(); pvpAct('ability'); return; }
@@ -1183,6 +1352,7 @@ function startWorldLoop(){
       if (e.key === 'q' || e.key === 'Q'){ openDropCoin(); return; }
       if (e.key === 'b' || e.key === 'B'){ openBestiary(); return; }
       if (e.key === 'j' || e.key === 'J'){ handleGroupKey(); return; }
+      if (e.key === 'y' || e.key === 'Y'){ handleBanKey(); return; }
       const map = { ArrowUp:[0,-1], ArrowDown:[0,1], ArrowLeft:[-1,0], ArrowRight:[1,0], w:[0,-1], s:[0,1], a:[-1,0], d:[1,0], W:[0,-1], S:[0,1], A:[-1,0], D:[1,0] };
       if (map[e.key]){ e.preventDefault(); tryMove(...map[e.key]); }
     });
@@ -1203,14 +1373,17 @@ function renderLeaderboard(){
   const rows = board.length ? board.map((p, i) => {
     const mine = p.id === myId;
     const rank = medals[i] || `#${i + 1}`;
+    const lvl = levelFromExp(p.exp);
+    const stars = '★'.repeat(lvl);
     return `<tr style="${mine ? 'background:rgba(255,208,102,.12);' : ''}">
       <td style="padding:6px 10px; text-align:center;">${rank}</td>
       <td style="padding:6px 10px;">${escapeHtml(p.name)}${mine ? ' <span class="muted">(tú)</span>' : ''}</td>
+      <td style="padding:6px 10px; text-align:center;"><span class="gold" title="Nivel ${lvl}" style="letter-spacing:1px;">${stars}</span><br><span class="muted" style="font-size:.72rem;">Nivel ${lvl}</span></td>
       <td style="padding:6px 10px; text-align:center;">e- ${p.electrons}</td>
       <td style="padding:6px 10px; text-align:center;" class="gold">${p.Q} Q</td>
       <td style="padding:6px 10px; text-align:center;"> ${p.wins}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="5" class="muted" style="padding:12px; text-align:center;">Aún no hay jugadores en la tabla.</td></tr>`;
+  }).join('') : `<tr><td colspan="6" class="muted" style="padding:12px; text-align:center;">Aún no hay jugadores en la tabla.</td></tr>`;
   cont.innerHTML = `
     <div class="card">
       <h3 style="margin:0 0 8px;"> Tabla de clasificación</h3>
@@ -1219,6 +1392,7 @@ function renderLeaderboard(){
           <thead><tr style="border-bottom:1px solid var(--panel2);">
             <th style="padding:6px 10px;">#</th>
             <th style="padding:6px 10px; text-align:left;">Jugador</th>
+            <th style="padding:6px 10px;">Nivel</th>
             <th style="padding:6px 10px;">Electrones</th>
             <th style="padding:6px 10px;">Q</th>
             <th style="padding:6px 10px;">Victorias</th>
@@ -1300,6 +1474,58 @@ function drawActor(ctx, img, tx, ty, T, camX, camY, isMe, label, p){
     ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(px - 6, py - 16, T + 12, 14);
     ctx.fillStyle = '#ffd54f'; ctx.fillText(p.emote, px + T/2, py - 5);
   }
+  // Globo de texto del chat (dura ~6 s sobre el personaje que habla)
+  if (p && p.bubble && Date.now() - (p.bubbleT||0) < 6000){
+    drawChatBubble(ctx, px + T/2, py - 4, p.bubble, isMe);
+  }
+}
+/* Dibuja un globo de texto con la cola apuntando al personaje */
+function drawChatBubble(ctx, cx, bottomY, text, isMe){
+  ctx.save();
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  const maxW = 140, padX = 7, padY = 5, lineH = 14;
+  // Envolver el texto en líneas
+  const words = String(text).split(/\s+/);
+  const lines = []; let cur = '';
+  for (const w of words){
+    const test = cur ? cur + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && cur){ lines.push(cur); cur = w; }
+    else { cur = test; }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > 4){ lines.length = 4; lines[3] = lines[3].slice(0, 18) + '…'; }
+  let bw = 0; for (const l of lines) bw = Math.max(bw, ctx.measureText(l).width);
+  bw += padX * 2; const bh = lines.length * lineH + padY * 2;
+  const bx = cx - bw / 2, by = bottomY - 8 - bh;
+  // Fondo redondeado
+  const r = 7;
+  ctx.beginPath();
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + bw, by, bx + bw, by + bh, r);
+  ctx.arcTo(bx + bw, by + bh, bx, by + bh, r);
+  ctx.arcTo(bx, by + bh, bx, by, r);
+  ctx.arcTo(bx, by, bx + bw, by, r);
+  ctx.closePath();
+  ctx.fillStyle = isMe ? 'rgba(30,26,8,.92)' : 'rgba(8,12,32,.92)';
+  ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = isMe ? '#ffd54f' : '#5aa9ff';
+  ctx.stroke();
+  // Cola apuntando hacia abajo (al personaje)
+  ctx.beginPath();
+  ctx.moveTo(cx - 5, by + bh - 1);
+  ctx.lineTo(cx, by + bh + 7);
+  ctx.lineTo(cx + 5, by + bh - 1);
+  ctx.closePath();
+  ctx.fillStyle = isMe ? 'rgba(30,26,8,.92)' : 'rgba(8,12,32,.92)';
+  ctx.fill();
+  ctx.strokeStyle = isMe ? '#ffd54f' : '#5aa9ff';
+  ctx.stroke();
+  // Texto
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < lines.length; i++){
+    ctx.fillText(lines[i], bx + padX, by + padY + i * lineH);
+  }
+  ctx.restore();
 }
 
 /* ---------- Dibujar una moneda Q en el campo ---------- */
@@ -1378,6 +1604,7 @@ function toggleChat(){
   else { const inp = document.getElementById('chatinput'); if (inp) inp.blur(); }
 }
 function sendChat(){
+  if (jailActive) return;
   const inp = document.getElementById('chatinput');
   if (!inp) return;
   const text = inp.value.trim().slice(0, 120);
@@ -1412,6 +1639,7 @@ function closeModal(){ const m = document.getElementById('modal'); if (m) m.remo
 
 function startBattle(foeType){
   battleActive = true;
+  ambientStop();
   socket.emit('emote', ' ¡en batalla!');
   foeType = WILD_FOES[foeType] ? foeType : 'hydrogen';
   normalizeParty();
@@ -1791,6 +2019,7 @@ function endBattle(){
   sendStats();
   const c = document.getElementById('coins'); if (c) c.textContent = state.Q + ' Q';
   const ex = document.getElementById('exp'); if (ex) ex.textContent = 'EXP ' + state.exp;
+  if (inWorld) ambientStart();   // reanuda la música del campo
 }
 
 /* =================================================
@@ -1806,13 +2035,39 @@ function triggerEncounter(foeType){
   }
 }
 function giveWildReward(foeType, win){
-  const f = WILD_FOES[foeType]; if (!f || !win) return;
+  const f = WILD_FOES[foeType]; if (!f || !win) return null;
   state.wins++;
   const lvlBefore = getLevel();
   applyReward(f.reward);
-  if (getLevel() > lvlBefore) sfxLevelUp();
-  if (Math.random() < Math.min(1, f.bonusChance * luckMul())){ applyReward(f.bonus); sfxBonus(); }
+  let leveledUp = false;
+  if (getLevel() > lvlBefore){ sfxLevelUp(); leveledUp = true; }
+  let bonusGot = null;
+  if (Math.random() < Math.min(1, f.bonusChance * luckMul())){ applyReward(f.bonus); sfxBonus(); bonusGot = f.bonus; }
   sendStats();
+  return { base: f.reward, bonus: bonusGot, leveledUp, level: getLevel() };
+}
+// Muestra al final de una batalla de grupo las recompensas obtenidas.
+function showGroupRewardModal(win, info){
+  if (!win || !info){
+    openModal(`
+      <h2 style="text-align:center;"> El grupo fue derrotado…</h2>
+      <p class="muted" style="text-align:center; margin-top:8px;">No se obtuvieron recompensas esta vez.</p>
+      <div class="row" style="justify-content:center; margin-top:18px;"><button class="btn" onclick="closeModal()">Continuar</button></div>`);
+    return;
+  }
+  const baseHtml  = rewardParts(info.base) || '<span class="muted">Sin recompensa base</span>';
+  const bonusHtml = info.bonus ? `<p class="gold" style="margin-top:10px;"> ¡Botín raro! ${rewardParts(info.bonus)}</p>` : '';
+  const lvlHtml   = info.leveledUp ? `<p class="gold" style="margin-top:10px;"> ¡Subiste al Nivel ${info.level}!</p>` : '';
+  openModal(`
+    <h2 style="text-align:center;"> ¡El grupo ganó la batalla!</h2>
+    <div class="card" style="margin-top:14px; background:#0a0e28; text-align:center; line-height:1.9;">
+      <p style="color:var(--accent); margin:0;"><b> Recompensa de grupo</b></p>
+      <p style="margin-top:6px;">${baseHtml}</p>
+      ${bonusHtml}
+      ${lvlHtml}
+    </div>
+    <div class="row" style="justify-content:center; margin-top:18px;"><button class="btn" onclick="closeModal()">Continuar</button></div>
+  `);
 }
 function serializeBattle(){
   const b = battle;
@@ -2101,6 +2356,7 @@ function renderGroupBattle(){
 function startGroupBattle(d){
   closeModal();
   battleActive = true;
+  ambientStop();
   const amHost = d.hostId === myId;
   const size = d.size || (d.members ? d.members.length : 1);
   groupBattle = { host: amHost, hostId: d.hostId, size };
@@ -2172,28 +2428,33 @@ function applyGroupBattleSync(d){
     log:s.log
   };
   battleActive = true;
+  ambientStop();
   renderBattle();
 }
 function endGroupBattleHost(){
   if (!battle) return;
   const win = battle.win;
   const foeType = battle.foeType;
-  giveWildReward(foeType, win);
+  const rewardInfo = giveWildReward(foeType, win);
   socket.emit('group-battle-end', { win, foeType });
   battleActive = false; groupBattle = null; battle = null; closeModal();
   socket.emit('emote', win ? ' ¡ganamos!' : '');
   sendStats();
   if (inWorld) startWorldLoop();
+  if (inWorld) ambientStart();
   refreshHUD();
+  showGroupRewardModal(win, rewardInfo);
 }
 function endGroupBattleRemote(d){
   const win = !!(d && d.win);
   const foeType = d && d.foeType;
-  if (foeType) giveWildReward(foeType, win);
-  toast(win ? ' ¡El grupo ganó la batalla!' : ' El grupo fue derrotado…');
+  let rewardInfo = null;
+  if (foeType) rewardInfo = giveWildReward(foeType, win);
   battleActive = false; groupBattle = null; battle = null; closeModal();
   if (inWorld) startWorldLoop();
+  if (inWorld) ambientStart();
   refreshHUD();
+  showGroupRewardModal(win, rewardInfo);
 }
 
 /* =================================================
@@ -2363,7 +2624,7 @@ function gatherAccount(n){
     atoms:{...state.atoms}, exp:state.exp, steps:state.steps, wins:state.wins,
     luckPotions:state.luckPotions||0 };
 }
-function saveToSlot(n){
+function doAccountSave(n){
   const data = gatherAccount(n);
   const blob = new Blob([JSON.stringify(data, null, 2)], { type:'text/plain' });
   const a = document.createElement('a');
@@ -2374,8 +2635,48 @@ function saveToSlot(n){
   state.accountId = data.accountId;
   state.accountSlot = n;
   try{ localStorage.setItem('elementaria_online_account'+n, JSON.stringify({ accountId:data.accountId, name:data.name, ts:data.ts })); }catch(e){}
+}
+function saveToSlot(n){
+  doAccountSave(n);
   openSaveMenu();
 }
+
+/* ---------- AUTOGUARDADO (cada 5 minutos, con confirmación) ---------- */
+let autosaveOn = true;
+try{ const _v = localStorage.getItem('elementaria_autosave'); if (_v !== null) autosaveOn = (_v === '1'); }catch(e){}
+let autosaveTimer = null;
+function startAutosaveTimer(){
+  if (autosaveTimer) clearInterval(autosaveTimer);
+  autosaveTimer = setInterval(() => {
+    if (!autosaveOn) return;
+    if (!inWorld || jailActive) return;
+    if (battleActive || pvp || groupBattle || trade) return;   // no interrumpir combate/intercambio
+    if (document.getElementById('modal')) return;              // no tapar otra ventana abierta
+    showAutosavePrompt();
+  }, 5 * 60 * 1000);
+}
+function showAutosavePrompt(){
+  openModal(`
+    <div class="row" style="justify-content:center;"><h2 style="margin:0;">Autoguardado activo</h2></div>
+    <p class="muted" style="margin-top:12px;text-align:center;">Han pasado 5 minutos. ¿Quieres guardar tu progreso ahora?</p>
+    <div class="row" style="justify-content:center;margin-top:16px;gap:14px;">
+      <button class="btn" onclick="autosaveConfirm(true)">SÍ</button>
+      <button class="btn ghost" onclick="autosaveConfirm(false)">NO</button>
+    </div>
+  `);
+}
+function autosaveConfirm(yes){
+  closeModal();
+  if (yes){ doAccountSave(state.accountSlot || 1); toast('Progreso guardado (autoguardado).'); }
+  else { toast('Autoguardado omitido.'); }
+}
+function toggleAutosave(){
+  autosaveOn = !autosaveOn;
+  try{ localStorage.setItem('elementaria_autosave', autosaveOn ? '1' : '0'); }catch(e){}
+  toast(autosaveOn ? 'Autoguardado activado.' : 'Autoguardado desactivado.');
+  if (document.getElementById('modal')) openSaveMenu();
+}
+startAutosaveTimer();
 function loadFromFile(n){
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.txt,.json,text/plain,application/json';
@@ -2447,6 +2748,10 @@ function openSaveMenu(){
     <div class="row" style="justify-content:space-between;"><h2 style="margin:0;"> Cuentas</h2><button class="btn ghost" onclick="closeModal()"></button></div>
     <p class="muted" style="margin-top:6px;">${activeInfo}</p>
     <p class="muted" style="margin-top:4px;">Puedes tener hasta <b>3 cuentas</b>. Cada una tiene un <b>ID único</b>. Al <b>Guardar</b> se descarga un archivo .txt con todos tus datos e ID. Al <b>Cargar</b> un archivo, regresas a esa cuenta original.</p>
+    <div class="card" style="margin-top:10px;"><div class="row" style="justify-content:space-between;align-items:center;gap:10px;">
+      <div><b>Autoguardado</b><br><span class="muted" style="font-size:.85rem;">Cada 5 minutos te preguntará si quieres guardar.</span></div>
+      <button class="btn ${autosaveOn ? '' : 'alt'}" onclick="toggleAutosave()">${autosaveOn ? 'Activado ✓' : 'Desactivado ✗'}</button>
+    </div></div>
     ${slots}
   `);
 }
@@ -2469,6 +2774,157 @@ function handleGroupKey(){
   if (!inWorld || battleActive || document.getElementById('modal')) return;
   if (tradeSelectedId && others[tradeSelectedId]){ sendGroupInvite(tradeSelectedId); return; }
   showGroupPanel();
+}
+
+/* ---------- BANEO: proponer, votar y cárcel ---------- */
+function handleBanKey(){
+  if (jailActive){ toast('Estás en la cárcel. Todo está bloqueado.'); return; }
+  if (!inWorld || battleActive || document.getElementById('modal')) return;
+  if (tradeSelectedId && others[tradeSelectedId]) openBanDialog(tradeSelectedId);
+  else toast('Haz clic en un jugador del mapa para seleccionarlo y pulsa Y.');
+}
+function openBanDialog(id){
+  if (!others[id]){ toast('Ese jugador ya no está aquí.'); return; }
+  banTargetId = id;
+  const nm = escapeHtml(others[id].name || id.slice(0, 4));
+  openModal(`
+    <div class="row" style="justify-content:space-between;"><h2 style="margin:0;">Baneo de jugador</h2><button class="btn ghost" onclick="closeModal()">✕</button></div>
+    <p class="muted" style="margin-top:8px;">Vas a proponer el baneo de <b>${nm}</b>. Todos los jugadores votarán. Escribe abajo por qué quieres banearlo:</p>
+    <textarea id="banReason" maxlength="200" placeholder="Motivo del baneo…" style="width:100%;margin-top:10px;min-height:84px;padding:10px;border-radius:8px;border:1px solid var(--panel2);background:#0a0e28;color:#fff;resize:vertical;"></textarea>
+    <div class="row" style="justify-content:center;margin-top:14px;gap:12px;">
+      <button class="btn" onclick="submitBan()">Aceptar</button>
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    </div>
+    <p class="muted" style="margin-top:10px;font-size:.8rem;">Nota: solo puedes iniciar un baneo cada 1 hora.</p>`);
+  setTimeout(()=>{ const t=document.getElementById('banReason'); if(t) t.focus(); }, 60);
+}
+function submitBan(){
+  const t = document.getElementById('banReason');
+  const reason = t ? t.value.trim().slice(0, 200) : '';
+  if (!reason){ toast('Escribe el motivo del baneo.'); return; }
+  socket.emit('ban-start', { targetId: banTargetId, reason });
+  closeModal();
+  toast('Propuesta de baneo enviada. Esperando la votación…');
+}
+function showBanVote(d){
+  if (jailActive) return;        // en la cárcel no se vota
+  if (battleActive) return;      // no interrumpir una batalla en curso
+  banVoteState = d;
+  const nm = escapeHtml(d.targetName || 'Jugador');
+  const reason = escapeHtml(d.reason || '(sin motivo)');
+  const mine = (d.targetId === myId);
+  openModal(`
+    <h2 style="text-align:center;">${d.tie ? 'Empate — se repite la votación' : 'Encuesta de baneo'}</h2>
+    <p style="text-align:center;margin-top:12px;font-size:1.1rem;">Este jugador <b>"${nm}"</b></p>
+    <div class="card" style="background:#0a0e28;margin-top:8px;"><p style="margin:0;">${reason}</p></div>
+    ${mine ? '<p class="gold" style="text-align:center;margin-top:10px;">¡Eres tú el acusado!</p>' : ''}
+    <p style="text-align:center;margin-top:10px;" id="banTimer" class="muted">Vota en ${d.seconds || 30}s…</p>
+    <div class="row" style="justify-content:center;margin-top:12px;gap:14px;">
+      <button class="btn" id="voteBanBtn" onclick="castBan('ban')">Baneo</button>
+      <button class="btn ghost" id="voteNoBtn" onclick="castBan('no')">NO</button>
+    </div>`);
+  let left = d.seconds || 30;
+  if (banVoteTimer) clearInterval(banVoteTimer);
+  banVoteTimer = setInterval(()=>{
+    left--;
+    const t = document.getElementById('banTimer');
+    if (t) t.textContent = left > 0 ? ('Vota en ' + left + 's…') : 'Contando votos…';
+    if (left <= 0){ clearInterval(banVoteTimer); banVoteTimer = null; }
+  }, 1000);
+}
+function castBan(choice){
+  if (!banVoteState) return;
+  socket.emit('ban-cast', { choice });
+  const bb = document.getElementById('voteBanBtn'), nb = document.getElementById('voteNoBtn');
+  if (bb) bb.disabled = true;
+  if (nb) nb.disabled = true;
+  const t = document.getElementById('banTimer'); if (t) t.textContent = 'Voto registrado. Esperando a los demás…';
+}
+function closeBanVote(){
+  if (banVoteTimer){ clearInterval(banVoteTimer); banVoteTimer = null; }
+  banVoteState = null;
+  if (document.getElementById('banTimer')) closeModal();
+}
+function showBanResult(d){
+  closeBanVote();
+  const nm = escapeHtml(d.targetName || 'Jugador');
+  if (d.outcome === 'ban'){
+    if (d.targetId === myId) return;   // yo recibo 'jailed' por separado
+    if (battleActive){ toast(nm + ' fue baneado por votación.'); return; }
+    openModal(`
+      <h2 style="text-align:center;">Baneo aprobado</h2>
+      <p style="text-align:center;margin-top:12px;"><b>"${nm}"</b> fue enviado a la cárcel por 5 minutos.</p>
+      <div class="row" style="justify-content:center;margin-top:14px;"><button class="btn" onclick="closeModal()">Entendido</button></div>`);
+  } else {
+    if (d.targetId === myId) return;   // el acusado recibe 'ban-warning'
+    toast('La votación decidió NO banear a ' + nm + '.');
+  }
+}
+function showBanWarning(d){
+  closeBanVote();
+  if (battleActive){ toast('Advertencia: no vuelvas a hacer eso.'); return; }
+  openModal(`
+    <h2 style="text-align:center;">Advertencia</h2>
+    <p style="text-align:center;margin-top:14px;font-size:1.05rem;">Advertimos que lo que esta haciendo esta mal, porfavor no lo hagas de nuevo ;></p>
+    <div class="row" style="justify-content:center;margin-top:16px;"><button class="btn" onclick="closeModal()">Entendido</button></div>`);
+}
+function enterJail(d){
+  jailActive = true;
+  jailUntil = (d && d.until) ? d.until : (Date.now() + 5 * 60 * 1000);
+  banVoteState = null;
+  if (banVoteTimer){ clearInterval(banVoteTimer); banVoteTimer = null; }
+  closeModal();
+  // cerrar cualquier combate/intercambio local
+  battleActive = false; battle = null; pvp = null; groupBattle = null; trade = null;
+  try{ ambientStop(); }catch(e){}
+  cancelAnimationFrame(rafId);
+  renderJail();
+  // En la cárcel no se ven los eventos del mundo abierto (confeti ni temporizador)
+  const _cf = document.getElementById('confetti');   if (_cf) _cf.style.display = 'none';
+  const _et = document.getElementById('eventTimer'); if (_et) _et.style.display = 'none';
+  if (jailTimer) clearInterval(jailTimer);
+  jailTimer = setInterval(()=>{
+    if (Date.now() >= jailUntil){ exitJail(); return; }
+    updateJailTimer();
+  }, 500);
+}
+function renderJail(){
+  let el = document.getElementById('jailOverlay');
+  if (el) el.remove();
+  el = document.createElement('div');
+  el.id = 'jailOverlay';
+  el.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(10,10,12,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;filter:grayscale(1);color:#cfcfcf;font-family:sans-serif;text-align:center;padding:20px;';
+  const cells = [];
+  for (let i = 0; i < 9; i++){
+    const center = (i === 4);
+    cells.push('<div style="background:' + (center ? '#555' : '#2a2a2a') + ';border:1px solid #444;border-radius:4px;display:flex;align-items:center;justify-content:center;">' + (center ? '<div style="width:28px;height:28px;border-radius:50%;background:#9a9a9a;"></div>' : '') + '</div>');
+  }
+  el.innerHTML =
+    '<h1 style="margin:0;letter-spacing:3px;color:#bdbdbd;">CÁRCEL</h1>' +
+    '<p style="margin:6px 0 16px;color:#9a9a9a;">Fuiste baneado por votación. Cumple tu condena.</p>' +
+    '<div style="display:grid;grid-template-columns:repeat(3,48px);grid-template-rows:repeat(3,48px);gap:5px;">' + cells.join('') + '</div>' +
+    '<div id="jailClock" style="margin-top:22px;font-size:3.6rem;font-weight:800;color:#e6e6e6;letter-spacing:4px;">5:00</div>' +
+    '<p style="margin-top:12px;color:#8a8a8a;max-width:340px;font-size:.9rem;">No puedes moverte, hablar en el chat ni batallar. Todos los botones están bloqueados.</p>';
+  document.body.appendChild(el);
+  updateJailTimer();
+}
+function updateJailTimer(){
+  const c = document.getElementById('jailClock'); if (!c) return;
+  const ms = Math.max(0, jailUntil - Date.now());
+  const s = Math.ceil(ms / 1000);
+  const m = Math.floor(s / 60);
+  const ss = (s % 60).toString().padStart(2, '0');
+  c.textContent = m + ':' + ss;
+}
+function exitJail(){
+  jailActive = false;
+  if (jailTimer){ clearInterval(jailTimer); jailTimer = null; }
+  const el = document.getElementById('jailOverlay'); if (el) el.remove();
+  // Al salir, si el evento sigue activo, vuelven a verse en el mundo abierto
+  const _cf = document.getElementById('confetti');   if (_cf) _cf.style.display = '';
+  const _et = document.getElementById('eventTimer'); if (_et) _et.style.display = '';
+  toast('Saliste de la cárcel. ¡Pórtate bien!');
+  if (inWorld){ startWorldLoop(); try{ ambientStart(); }catch(e){} }
 }
 function sendGroupInvite(id){
   if (!inWorld || battleActive) return;
@@ -2606,6 +3062,7 @@ function startPvpBattle(d){
     log:[` ¡Batalla PVP contra ${d.oppName || 'Rival'}! Tu ${meC.label} ${meC.icon} vs ${foeC.label} ${foeC.icon}.`, d.youFirst ? ' Empiezas tú.' : ' Empieza tu rival.']
   };
   battleActive = true;
+  ambientStop();
   renderPvpBattle();
 }
 function pvplog(m){ if (!pvp) return; pvp.log.push(m); if (pvp.log.length > 20) pvp.log.shift(); }
@@ -2615,7 +3072,7 @@ function finishPvp(){
   if (pvp.win){ const lb = getLevel(); state.wins++; state.Q += 2; state.exp += 10; pvplog(' Recompensa PVP: +2 Q ·  +10 EXP'); if (getLevel() > lb){ pvplog(` ¡Subiste al Nivel ${getLevel()}!`); sfxLevelUp(); } }
   sendStats();
 }
-function endPvpBattle(){ battleActive = false; pvp = null; closeModal(); if (inWorld) startWorldLoop(); refreshHUD(); }
+function endPvpBattle(){ battleActive = false; pvp = null; closeModal(); if (inWorld) startWorldLoop(); refreshHUD(); if (inWorld) ambientStart(); }
 function pvpRematch(){
   const oid = pvp ? pvp.oppId : null;
   endPvpBattle();

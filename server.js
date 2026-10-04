@@ -54,7 +54,8 @@ function broadcastLeaderboard() {
       name: p.name || p.id.slice(0, 4),
       electrons: Math.max(0, parseInt(s.electrons, 10) || 0),
       Q: Math.max(0, parseInt(s.Q, 10) || 0),
-      wins: Math.max(0, parseInt(s.wins, 10) || 0)
+      wins: Math.max(0, parseInt(s.wins, 10) || 0),
+      exp: Math.max(0, parseInt(s.exp, 10) || 0)
     });
   });
   // Orden: más victorias, luego más Q, luego más electrones
@@ -110,7 +111,7 @@ function leaveGroup(id){
 
 const TRADE_KEYS = ['up', 'down', 'proton', 'neutron', 'electron', 'hydrogen'];
 function emptyOffer() { return { up: 0, down: 0, proton: 0, neutron: 0, electron: 0, hydrogen: 0 }; }
-// Limpia una oferta: enteros >= 0 y como máximo 5 objetos en total
+// Limpia una oferta: enteros >= 0 y como máximo 15 objetos en total
 function sanitizeOffer(o) {
   const out = emptyOffer();
   let total = 0;
@@ -121,9 +122,9 @@ function sanitizeOffer(o) {
       out[k] = v; total += v;
     }
   }
-  if (total > 5) {
+  if (total > 15) {
     for (const k of TRADE_KEYS) {
-      while (total > 5 && out[k] > 0) { out[k]--; total--; }
+      while (total > 15 && out[k] > 0) { out[k]--; total--; }
     }
   }
   return out;
@@ -149,6 +150,58 @@ function spawnTile() {
   return { tx: SPAWN.tx, ty: SPAWN.ty };
 }
 
+// ── Sistema de baneos (votación entre jugadores) ──
+const JAIL_MS         = 5 * 60 * 1000;    // 5 minutos en la cárcel
+const BAN_COOLDOWN_MS = 60 * 60 * 1000;   // 1 hora de espera entre baneos (por quien lo inicia)
+const BAN_VOTE_MS     = 30 * 1000;        // 30 s para votar la encuesta
+const jailed      = new Map();            // socketId   -> until (timestamp ms)
+const banCooldown = new Map();            // iniciadorId -> until (timestamp ms)
+let   banVote     = null;                 // { targetId, targetName, reason, initiatorId, votes:Map, timer }
+
+function isJailed(id) {
+  const u = jailed.get(id);
+  if (!u) return false;
+  if (Date.now() >= u) { jailed.delete(id); return false; }
+  return true;
+}
+
+function finishBanVote() {
+  if (!banVote) return;
+  const v = banVote;
+  if (v.timer) { clearTimeout(v.timer); v.timer = null; }
+  let ban = 0, no = 0;
+  v.votes.forEach((c) => { if (c === 'ban') ban++; else if (c === 'no') no++; });
+  if (ban > no) {
+    // Gana Baneo -> a la cárcel
+    banVote = null;
+    const until = Date.now() + JAIL_MS;
+    jailed.set(v.targetId, until);
+    banCooldown.set(v.initiatorId, Date.now() + BAN_COOLDOWN_MS);
+    io.emit('ban-result', { outcome: 'ban', targetId: v.targetId, targetName: v.targetName, reason: v.reason, until });
+    io.to(v.targetId).emit('jailed', { until, reason: v.reason });
+    console.log(`[B] ${v.targetName} enviado a la cárcel por votación (${ban} vs ${no})`);
+  } else if (no > ban) {
+    // Gana NO -> advertencia al objetivo
+    banVote = null;
+    banCooldown.set(v.initiatorId, Date.now() + BAN_COOLDOWN_MS);
+    io.emit('ban-result', { outcome: 'no', targetId: v.targetId, targetName: v.targetName, reason: v.reason });
+    io.to(v.targetId).emit('ban-warning', { reason: v.reason });
+  } else {
+    // Empate -> se repite la encuesta
+    v.votes = new Map();
+    v.startedAt = Date.now();
+    io.emit('ban-vote', { targetId: v.targetId, targetName: v.targetName, reason: v.reason, initiatorId: v.initiatorId, seconds: BAN_VOTE_MS / 1000, tie: true });
+    v.timer = setTimeout(finishBanVote, BAN_VOTE_MS);
+  }
+}
+
+function cancelBanVote(reason) {
+  if (!banVote) return;
+  if (banVote.timer) clearTimeout(banVote.timer);
+  banVote = null;
+  io.emit('ban-cancel', { reason: reason || '' });
+}
+
 io.on('connection', (socket) => {
   console.log(`[+] Conexión: ${socket.id}`);
 
@@ -158,19 +211,33 @@ io.on('connection', (socket) => {
 
   // El cliente entra al mundo con su personaje ya dibujado
   socket.on('join', (data) => {
+    const wantName = (data && typeof data.name === 'string') ? data.name.slice(0, 12).trim() : '';
+    // Verificar que el nombre no esté ya en uso por otro jugador conectado
+    if (wantName){
+      let taken = false;
+      players.forEach((p, pid) => {
+        if (pid !== socket.id && p.name && p.name.trim().toLowerCase() === wantName.toLowerCase()) taken = true;
+      });
+      if (taken){
+        socket.emit('name-taken', { name: wantName });
+        console.log(`[x] ${socket.id} intentó usar un nombre en uso: ${wantName}`);
+        return;
+      }
+    }
     const spawn  = spawnTile();
     const player = {
       id: socket.id,
       tx: spawn.tx,
       ty: spawn.ty,
       avatar: Array.isArray(data && data.avatar) ? data.avatar : null,
-      name: (data && typeof data.name === 'string') ? data.name.slice(0, 12) : '',
+      name: wantName,
       equipped: (data && typeof data.equipped === 'string') ? data.equipped.slice(0, 16) : 'proton',
       partyKeys: ['proton'],
       stats: {
         electrons: (data && data.stats) ? (parseInt(data.stats.electrons, 10) || 0) : 0,
         Q:         (data && data.stats) ? (parseInt(data.stats.Q, 10) || 0) : 0,
-        wins:      (data && data.stats) ? (parseInt(data.stats.wins, 10) || 0) : 0
+        wins:      (data && data.stats) ? (parseInt(data.stats.wins, 10) || 0) : 0,
+        exp:       (data && data.stats) ? (parseInt(data.stats.exp, 10) || 0) : 0
       }
     };
     players.set(socket.id, player);
@@ -185,6 +252,7 @@ io.on('connection', (socket) => {
 
     // A todos: entré yo
     io.emit('player-joined', player);
+    socket.emit('join-ok', { name: player.name });
     broadcastLeaderboard();
     console.log(`[→] ${socket.id} entró al mundo (${players.size} jugadores)`);
   });
@@ -193,6 +261,7 @@ io.on('connection', (socket) => {
   socket.on('move', (data) => {
     const p = players.get(socket.id);
     if (!p) return;
+    if (isJailed(socket.id)) return;   // en la cárcel no se puede mover
     const tx = Math.max(0, Math.min(WORLD.W - 1, parseInt(data.tx, 10)));
     const ty = Math.max(0, Math.min(WORLD.H - 1, parseInt(data.ty, 10)));
     if (Number.isNaN(tx) || Number.isNaN(ty)) return;
@@ -237,6 +306,7 @@ io.on('connection', (socket) => {
 
   // Chat global — se difunde a todos con el nombre del jugador
   socket.on('chat', (data) => {
+    if (isJailed(socket.id)) return;   // en la cárcel no se puede hablar
     const p = players.get(socket.id);
     const text = String(data && data.text ? data.text : '').slice(0, 120);
     if (!text) return;
@@ -270,9 +340,52 @@ io.on('connection', (socket) => {
     p.stats = {
       electrons: Math.max(0, parseInt(data.electrons, 10) || 0),
       Q:         Math.max(0, parseInt(data.Q, 10) || 0),
-      wins:      Math.max(0, parseInt(data.wins, 10) || 0)
+      wins:      Math.max(0, parseInt(data.wins, 10) || 0),
+      exp:       Math.max(0, parseInt(data.exp, 10) || 0)
     };
     broadcastLeaderboard();
+  });
+
+  // ══ BANEO (votación entre jugadores) ══
+  // Un jugador propone banear a otro con un motivo -> se abre encuesta para todos
+  socket.on('ban-start', (data) => {
+    const from = players.get(socket.id);
+    if (!from) return;
+    if (isJailed(socket.id)) { socket.emit('ban-error', { msg: 'No puedes iniciar un baneo desde la cárcel.' }); return; }
+    const targetId = String(data && data.targetId ? data.targetId : '');
+    const target = players.get(targetId);
+    if (!target) { socket.emit('ban-error', { msg: 'Ese jugador ya no está disponible.' }); return; }
+    if (targetId === socket.id) { socket.emit('ban-error', { msg: 'No puedes banearte a ti mismo.' }); return; }
+    if (isJailed(targetId)) { socket.emit('ban-error', { msg: 'Ese jugador ya está en la cárcel.' }); return; }
+    if (banVote) { socket.emit('ban-error', { msg: 'Ya hay una votación de baneo en curso.' }); return; }
+    const cd = banCooldown.get(socket.id) || 0;
+    if (Date.now() < cd) {
+      const mins = Math.ceil((cd - Date.now()) / 60000);
+      socket.emit('ban-error', { msg: 'Debes esperar ' + mins + ' min antes de iniciar otro baneo.' }); return;
+    }
+    const reason = (String(data && data.reason ? data.reason : '').slice(0, 200).trim()) || '(sin motivo)';
+    banVote = {
+      targetId,
+      targetName: target.name || targetId.slice(0, 4),
+      reason,
+      initiatorId: socket.id,
+      votes: new Map(),
+      startedAt: Date.now(),
+      timer: null
+    };
+    io.emit('ban-vote', { targetId, targetName: banVote.targetName, reason, initiatorId: socket.id, seconds: BAN_VOTE_MS / 1000, tie: false });
+    banVote.timer = setTimeout(finishBanVote, BAN_VOTE_MS);
+    console.log(`[B] ${from.name || socket.id.slice(0,4)} propone banear a ${banVote.targetName}`);
+  });
+
+  // Un jugador emite su voto en la encuesta activa
+  socket.on('ban-cast', (data) => {
+    if (!banVote) return;
+    if (!players.has(socket.id)) return;
+    const choice = (data && data.choice === 'ban') ? 'ban' : 'no';
+    banVote.votes.set(socket.id, choice);
+    // Si ya votaron todos los jugadores conectados, cerramos antes de tiempo
+    if (banVote.votes.size >= players.size) finishBanVote();
   });
 
   // ── PVP: envío de solicitud ──
@@ -282,6 +395,7 @@ io.on('connection', (socket) => {
     const targetId = String(data && data.targetId ? data.targetId : '');
     const target = players.get(targetId);
     if (!target) { socket.emit('pvp-error', { msg: 'Ese jugador ya no está disponible.' }); return; }
+    if (isJailed(socket.id) || isJailed(targetId)) { socket.emit('pvp-error', { msg: 'No disponible: hay un jugador en la cárcel.' }); return; }
     if (targetId === socket.id) { socket.emit('pvp-error', { msg: 'No puedes retarte a ti mismo.' }); return; }
     if (inBattle.has(socket.id) || inBattle.has(targetId) || pendingInvite.has(targetId)) {
       socket.emit('pvp-error', { msg: 'Ese jugador está ocupado ahora mismo.' }); return;
@@ -355,6 +469,7 @@ io.on('connection', (socket) => {
     const targetId = String(data && data.targetId ? data.targetId : '');
     const target = players.get(targetId);
     if (!target) { socket.emit('group-error', { msg: 'Ese jugador ya no está disponible.' }); return; }
+    if (isJailed(socket.id) || isJailed(targetId)) { socket.emit('group-error', { msg: 'No disponible: hay un jugador en la cárcel.' }); return; }
     if (targetId === socket.id) { socket.emit('group-error', { msg: 'No puedes invitarte a ti mismo.' }); return; }
     if (inBattle.has(socket.id) || inBattle.has(targetId) || inTrade.has(socket.id) || inTrade.has(targetId) ||
         inGroupBattle.has(socket.id) || inGroupBattle.has(targetId)) {
@@ -443,6 +558,7 @@ io.on('connection', (socket) => {
     const targetId = String(data && data.targetId ? data.targetId : '');
     const target = players.get(targetId);
     if (!target) { socket.emit('trade-error', { msg: 'Ese jugador ya no está disponible.' }); return; }
+    if (isJailed(socket.id) || isJailed(targetId)) { socket.emit('trade-error', { msg: 'No disponible: hay un jugador en la cárcel.' }); return; }
     if (targetId === socket.id) { socket.emit('trade-error', { msg: 'No puedes intercambiar contigo mismo.' }); return; }
     if (inBattle.has(socket.id) || inBattle.has(targetId) || inTrade.has(socket.id) || inTrade.has(targetId) ||
         pendingInvite.has(targetId) || pendingTradeInvite.has(targetId)) {
@@ -557,6 +673,14 @@ io.on('connection', (socket) => {
         inGroupBattle.delete(socket.id);
       }
     }
+    // Si participaba en una votación de baneo
+    if (banVote && banVote.targetId === socket.id) {
+      cancelBanVote('El jugador acusado se desconectó.');
+    } else if (banVote) {
+      if (banVote.votes.has(socket.id)) banVote.votes.delete(socket.id);
+    }
+    jailed.delete(socket.id);
+    banCooldown.delete(socket.id);
     // Salir del grupo
     leaveGroup(socket.id);
     players.delete(socket.id);
