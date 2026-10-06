@@ -16,7 +16,7 @@ const state = {
   protons: 0,
   neutrons: 0,
   electrons: 0,
-  atoms: { hydrogen: 0, helium: 0, lithium: 0, beryllium: 0 },
+  atoms: { hydrogen: 0, helium: 0, lithium: 0, beryllium: 0, boron: 0, carbon: 0, nitrogen: 0 },
   slots: [null, null, null],
   avatar: null,
   name: '',
@@ -37,7 +37,10 @@ const COMBATANTS = {
   hydrogen: { key:'hydrogen', label:'Hidrógeno',icon:'Ⓑ', hp:20, atk:4, dodge:0.20, ability:{name:'Fusión',    icon:'', dmg:20, every:5, transform:'proton', transformHp:5} },
   helium:   { key:'helium',   label:'Helio',    icon:'', hp:30, atk:5, dodge:0.15, ability:{name:'Radiación α', icon:'', dmg:14, every:3} },
   lithium:  { key:'lithium',  label:'Litio',    icon:'', hp:30, atk:5, dodge:0.05, ability:{name:'Metabolismo', icon:'', every:3, healAll:10} },
-  beryllium:{ key:'beryllium',label:'Berilio',  icon:'', hp:40, atk:20, dodge:0.05, ability:{name:'Fisión', icon:'', every:5, fission:true, dmg:80, allyDmg:10, splitInto:'helium', splitCount:2} }
+  beryllium:{ key:'beryllium',label:'Berilio',  icon:'', hp:40, atk:20, dodge:0.05, ability:{name:'Fisión', icon:'', every:5, fission:true, dmg:80, allyDmg:10, splitInto:'helium', splitCount:2} },
+  boron:    { key:'boron',    label:'Boro',     icon:'', hp:150, atk:18, dodge:0.05, ability:{name:'Expulsión de protón', icon:'⚛️', passive:true, onHit:true, onHitChance:0.20, healAlly:15, electronDmg:20, every:1} },
+  carbon:   { key:'carbon',   label:'Carbono',  icon:'', hp:180, atk:15, dodge:0.05, ability:{name:'Ataque múltiple', icon:'⚔️', passive:true, multi:true, every:1} },
+  nitrogen: { key:'nitrogen', label:'Nitrógeno',icon:'', hp:160, atk:20, dodge:0.05, ability:{name:'Congelación', icon:'❄️', passive:true, freeze:true, freezeChance:0.10, freezeTurns:5, cooldown:10, every:1} }
 };
 /* ---------- Aspecto visual de las unidades (bola con letra) ---------- */
 function unitBall(key, size){
@@ -47,6 +50,9 @@ function unitBall(key, size){
   if (key === 'helium') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff3d6,#ffd76a);box-shadow:0 0 ${Math.round(size/3)}px rgba(255,215,106,.5);display:flex;align-items:center;justify-content:center;font-weight:800;color:#3a2a00;font-size:${Math.round(size*0.3)}px;">He</div>`;
   if (key === 'lithium') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#d9ffdc,#7ad67f);box-shadow:0 0 ${Math.round(size/3)}px rgba(122,214,127,.5);display:flex;align-items:center;justify-content:center;font-weight:800;color:#0a2a0c;font-size:${Math.round(size*0.34)}px;">Li</div>`;
   if (key === 'beryllium') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#eef1f4,#9aa6b2);box-shadow:0 0 ${Math.round(size/3)}px rgba(154,166,178,.6);display:flex;align-items:center;justify-content:center;font-weight:800;color:#1a2028;font-size:${Math.round(size*0.34)}px;">Be</div>`;
+  if (key === 'boron') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffe6c2,#d98a3d);box-shadow:0 0 ${Math.round(size/3)}px rgba(217,138,61,.55);display:flex;align-items:center;justify-content:center;font-weight:800;color:#3a1f05;font-size:${Math.round(size*0.34)}px;">B</div>`;
+  if (key === 'carbon') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#6b7280,#1c2128);box-shadow:0 0 ${Math.round(size/3)}px rgba(120,130,145,.55);display:flex;align-items:center;justify-content:center;font-weight:800;color:#f0f3f7;font-size:${Math.round(size*0.34)}px;">C</div>`;
+  if (key === 'nitrogen') return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#cfe4ff,#3f74d6);box-shadow:0 0 ${Math.round(size/3)}px rgba(63,116,214,.55);display:flex;align-items:center;justify-content:center;font-weight:800;color:#07183a;font-size:${Math.round(size*0.34)}px;">N</div>`;
   return null;
 }
 /* ---------- Enemigos salvajes del campo ---------- */
@@ -57,20 +63,181 @@ const WILD_FOES = {
   helium: {hp:25, atk:2, dodge:0.5, label:'Helio', icon:'', letter:'He', spawnChance:0.01,
     gradient:'radial-gradient(circle at 35% 30%,#fff3d6,#ffd76a)', textColor:'#3a2a00',
     reward:{Q:2, exp:10}, bonusChance:0.1, bonus:{up:4, down:4, e:2}},
-  lithium: {hp:30, atk:4, dodge:0.10, label:'Litio', icon:'', letter:'Li', spawnChance:0.001, spawnDesert:0.03, terrain:'G',
+  lithium: {hp:50, atk:4, dodge:0, label:'Litio', icon:'', letter:'Li', spawnChance:0.001, spawnDesert:0.03, terrain:'G',
     gradient:'radial-gradient(circle at 35% 30%,#d9ffdc,#7ad67f)', textColor:'#0a2a0c',
     foeAbility:{type:'steal', name:'Ionización', icon:'', chance:0.5},
     reward:{Q:3, exp:15, up:1, down:1}, bonusChance:0.1, bonus:{exp:20, e:2, Q:5}},
-  beryllium: {hp:60, atk:6, dodge:0.05, label:'Berilio', icon:'', letter:'Be', spawnChance:0, spawnDesert:0.005, terrain:'D',
+  beryllium: {hp:60, atk:6, dodge:0, label:'Berilio', icon:'', letter:'Be', spawnChance:0, spawnDesert:0.005, terrain:'D',
     gradient:'radial-gradient(circle at 35% 30%,#eef1f4,#9aa6b2)', textColor:'#1a2028',
     foeAbility:{type:'aoe', name:'Explosión pequeña', icon:'', chance:0.2, dmg:1, sound:'boom'},
     deathBlast:10,
     reward:{exp:30, up:2, down:2}, bonusChance:0.1, bonus:{exp:30, e:4, Q:10}},
-  boron: {hp:100, atk:10, dodge:0.05, label:'Boro', icon:'', letter:'B', spawnChance:0, spawnDesert:0.001, terrain:'D',
+  boron: {hp:100, atk:10, dodge:0, label:'Boro', icon:'', letter:'B', spawnChance:0, spawnDesert:0.001, terrain:'D',
     gradient:'radial-gradient(circle at 35% 30%,#ffe0c2,#e07a3b)', textColor:'#2a1400',
-    companion:true,
     reward:{exp:60, up:3, down:3, Q:10}, bonusChance:0.15, bonus:{exp:60, e:6, Q:25}},
+  // --- Bosque oscuro (orden: C, N, O, F, Ne) ---
+  carbon: {hp:150, atk:15, dodge:0.05, label:'Carbono', icon:'', letter:'C', spawnForest:35, terrain:'B',
+    gradient:'radial-gradient(circle at 35% 30%,#cfd6dd,#444c55)', textColor:'#e8edf2',
+    carbonComp:true,   // trae acompañantes según enlace molecular (C/CO/CO2/CH4)
+    reward:{Q:5, exp:28, up:2, down:2}, bonusChance:0.12, bonus:{exp:28, e:4, Q:10}},
+  nitrogen: {hp:125, atk:15, dodge:0.1, label:'Nitrógeno', icon:'', letter:'N', spawnForest:25, terrain:'B',
+    gradient:'radial-gradient(circle at 35% 30%,#e4e0ff,#8a7bff)', textColor:'#140a33',
+    foeAbility:{type:'freeze', name:'Congelación', icon:'', chance:0.4, freezeTurns:5},
+    reward:{Q:3, exp:20, up:1, down:1}, bonusChance:0.1, bonus:{exp:20, e:3, Q:6}},
+  oxygen: {hp:100, atk:15, dodge:0.1, label:'Oxígeno', icon:'', letter:'O', spawnForest:20, terrain:'B',
+    gradient:'radial-gradient(circle at 35% 30%,#dff0ff,#5bb6ff)', textColor:'#002033',
+    foeAbility:{type:'beta', name:'Emisión Beta', icon:'', chance:0.5, radDmg:15, atkVary:0.2},
+    reward:{Q:3, exp:20, up:1, down:1}, bonusChance:0.1, bonus:{exp:20, e:3, Q:6}},
+  fluorine: {hp:90, atk:20, dodge:0.1, label:'Flúor', icon:'', letter:'F', spawnForest:15, terrain:'B',
+    gradient:'radial-gradient(circle at 35% 30%,#eaffe0,#8ff04a)', textColor:'#0a2a00',
+    foeAbility:{type:'drain', name:'Atracción Electrónica', icon:'', chance:0.5, atkDown:0.2, atkDownTurns:3, dmg:10},
+    reward:{Q:4, exp:22, up:1, down:1}, bonusChance:0.1, bonus:{exp:22, e:3, Q:7}},
+  neon: {hp:250, atk:10, dodge:0, label:'Neón', icon:'', letter:'Ne', spawnForest:5, terrain:'B',
+    gradient:'radial-gradient(circle at 35% 30%,#ffd9f0,#ff5bc0)', textColor:'#2a0020',
+    inert:4,   // Gas noble: INERTE, inmune al daño durante 4 turnos
+    reward:{Q:4, exp:25, up:1, down:1}, bonusChance:0.1, bonus:{exp:25, e:3, Q:8}},
 };
+// --- Estados de combate (gases): helpers compartidos solo/grupo ---
+// Daño variable del enemigo (Oxígeno: ±20%)
+function foeAtkVal(base, fa){
+  if (fa && fa.atkVary){ const v = 1 + (Math.random()*2 - 1) * fa.atkVary; return Math.max(1, Math.round(base * v)); }
+  return base;
+}
+// Decremento de estados por turno del enemigo (inercia del foe, atk reducido)
+function statusTick(){
+  const b = battle; if (!b) return;
+  if (b.foe && b.foe.inertTurns > 0) b.foe.inertTurns--;
+  if (b.foe && b.foe.frozenTurns > 0) b.foe.frozenTurns--;
+  (b.companions||[]).forEach(c=>{ if(c.inertTurns>0) c.inertTurns--; if(c.frozenTurns>0) c.frozenTurns--; });
+  (b.units||[]).forEach(x=>{ if (x.atkModTurns > 0){ x.atkModTurns--; if (x.atkModTurns <= 0) x.atkMod = 0; } if(x.freezeCd>0) x.freezeCd--; });
+}
+// Aplica una habilidad de estado del enemigo (beta/freeze/drain) a unidades vivas.
+// Devuelve true si la usó (ya escribió el log). Sustituye al ataque normal.
+function applyFoeStatus(fa, alive){
+  const b = battle;
+  if (!alive || !alive.length) return false;
+  const pick = ()=> alive[Math.floor(Math.random()*alive.length)];
+  if (fa.type === 'freeze'){
+    const t = pick();
+    t.frozenTurns = Math.max(t.frozenTurns||0, fa.freezeTurns);
+    blog(`${fa.icon} ¡${b.foe.label} usa ${fa.name}! ${t.label} queda CONGELADO ${fa.freezeTurns} turnos (no puede actuar).`);
+    sfxHit(); shakeEl(); return true;
+  }
+  if (fa.type === 'drain'){
+    const t = pick();
+    t.cation = true;
+    t.atkMod = -(fa.atkDown); t.atkModTurns = fa.atkDownTurns;
+    t.hp -= fa.dmg;
+    blog(`${fa.icon} ¡${b.foe.label} usa ${fa.name}! Le roba un e- a ${t.label} (catión⁺): ${fa.dmg} de daño y -${Math.round(fa.atkDown*100)}% de ataque por ${fa.atkDownTurns} turnos.`);
+    sfxHit(); shakeEl();
+    if (t.hp <= 0){ t.hp = 0; t.alive = false; blog(` ${t.label} cayó…`); }
+    return true;
+  }
+  if (fa.type === 'beta'){
+    const t1 = pick();
+    t1.cation = true;
+    blog(`${fa.icon} ¡${b.foe.label} emite radiación Beta! Le arranca un e- a ${t1.label} (catión⁺).`);
+    const t2 = pick();
+    t2.hp -= fa.radDmg;
+    blog(` La radiación golpea a ${t2.label}: ${fa.radDmg} de daño por radiación.`);
+    sfxHit(); shakeEl();
+    if (t2.hp <= 0){ t2.hp = 0; t2.alive = false; blog(` ${t2.label} cayó…`); }
+    return true;
+  }
+  return false;
+}
+// Insignias de estado para la vista
+function unitStatusHtml(u){
+  const p = [];
+  if (u.cation) p.push(`<span style="color:#ff6ad5;">catión⁺</span>`);
+  if (u.frozenTurns > 0) p.push(`<span style="color:#6ad5ff;">congelado ${u.frozenTurns}</span>`);
+  if (u.atkModTurns > 0) p.push(`<span style="color:#ffb86a;">atk ${u.atkMod>0?'+':''}${Math.round(u.atkMod*100)}% (${u.atkModTurns})</span>`);
+  return p.length ? `<p class="muted" style="font-size:.68rem;margin:2px 0;">${p.join(' · ')}</p>` : '';
+}
+function foeStatusHtml(o){
+  const p = [];
+  if (o && o.inertTurns > 0) p.push(`<span style="color:#9fe9ff;">INERTE ${o.inertTurns}</span>`);
+  if (o && o.frozenTurns > 0) p.push(`<span style="color:#6ad5ff;">congelado ${o.frozenTurns}</span>`);
+  return p.length ? `<p style="font-size:.68rem;margin:2px 0;">${p.join(' · ')}</p>` : '';
+}
+// --- Enemigos múltiples (Carbono + acompañantes moleculares) ---
+function enemyList(){ const b=battle; const arr=[b.foe]; (b.companions||[]).forEach(c=>arr.push(c)); return arr; }
+function enemiesDead(){ return enemyList().every(e=> e.hp<=0 || e.alive===false); }
+function curTarget(){
+  const b=battle;
+  let t = b.foe;
+  if (typeof b.target==='string' && b.target.indexOf('comp')===0){
+    const i = parseInt(b.target.slice(4),10)||0;
+    const c = (b.companions||[])[i];
+    if (c) t = c;
+  }
+  if (t.hp<=0 || t.alive===false){
+    t = enemyList().find(e=> e.hp>0 && e.alive!==false) || b.foe;
+    const ci = (b.companions||[]).indexOf(t);
+    b.target = ci>=0 ? ('comp'+ci) : 'foe';
+  }
+  return t;
+}
+// Acompañantes del Carbono según enlace (C solo 40%, CO 25%, CO2 20%, CH4 15%)
+function rollCarbonCompanions(sm){
+  sm = sm || 1;
+  const r = Math.random();
+  let keys = [], mol = 'C';
+  if (r < 0.40){ keys = []; mol = 'C (solo)'; }
+  else if (r < 0.65){ keys = ['oxygen']; mol = 'CO'; }
+  else if (r < 0.85){ keys = ['oxygen','oxygen']; mol = 'CO₂'; }
+  else { keys = ['hydrogen','hydrogen','hydrogen','hydrogen']; mol = 'CH₄'; }
+  const comps = keys.map(k=>{ const cf = WILD_FOES[k];
+    return {key:k, label:cf.label, icon:cf.icon, hp:cf.hp*sm, max:cf.hp*sm, atk:cf.atk*sm, dodge:cf.dodge, alive:true,
+      letter:cf.letter, gradient:cf.gradient, textColor:cf.textColor,
+      foeAbility:cf.foeAbility, inertTurns:cf.inert||0};
+  });
+  return {comps, mol};
+}
+function enemyTurnMulti(){
+  const b=battle; if(b.over) return;
+  const attackers=[]; if(b.foe.hp>0) attackers.push(b.foe); (b.companions||[]).forEach(c=>{ if(c.hp>0) attackers.push(c); });
+  for(let i=attackers.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const tmp=attackers[i]; attackers[i]=attackers[j]; attackers[j]=tmp; }
+  for(const atk of attackers){
+    if(b.over) break;
+    if(atk.hp<=0) continue;
+    if(atk.frozenTurns>0){ blog(` ❄️ ${atk.label} está CONGELADO y no puede atacar. (${atk.frozenTurns} restante${atk.frozenTurns===1?'':'s'})`); continue; }
+    const fa = (atk===b.foe) ? b.foeInfo.foeAbility : atk.foeAbility;
+    if(fa && (fa.type==='beta'||fa.type==='freeze'||fa.type==='drain') && Math.random() < (fa.chance||0.5)){
+      const savedLabel = b.foe.label;
+      if(atk!==b.foe) b.foe.label = atk.label;
+      const alive = b.units.filter(x=>x.alive);
+      applyFoeStatus(fa, alive);
+      b.foe.label = savedLabel;
+      if(b.units.every(x=>!x.alive)){ b.over=true; b.win=false; blog(` Todas tus unidades cayeron…`); renderBattle(); return; }
+      if(!b.units[b.active] || !b.units[b.active].alive){ autoSwitch(); }
+      continue;
+    }
+    const u=b.units[b.active];
+    if(!u || !u.alive) break;
+    if(u.immuneTurns>0){
+      blog(` ¡Inmune! Tu ${u.label} ignora el ataque de ${atk.label}. (0)`);
+      continue;
+    }
+    if(Math.random()<u.dodge){
+      blog(`${atk.label} ataca…  ¡tu ${u.label} lo esquivó! (0)`);
+      continue;
+    }
+    const dmg = foeAtkVal(atk.atk, fa);
+    u.hp -= dmg;
+    blog(`${atk.label} ataca → ${dmg} de daño a tu ${u.label}.`);
+    sfxHit(); shakeEl(); boronReact(u);
+    if(u.hp<=0){
+      u.hp=0; u.alive=false; blog(` Tu ${u.label} fue derrotado…`);
+      if(!autoSwitch()){ b.over=true; b.win=false; blog(` Todas tus unidades cayeron…`); renderBattle(); return; }
+    }
+  }
+  const ua=b.units[b.active];
+  if(ua && ua.immuneTurns>0) ua.immuneTurns--;
+  statusTick();
+  b.turn++;
+  renderBattle();
+}
 function ownedCount(key){
   if (key === 'proton') return state.protons;
   if (key === 'neutron') return state.neutrons;
@@ -163,7 +330,7 @@ let me = { tx: 12, ty: 6 };  // mi posición local (confirmada por el servidor)
    marrón=tienda(S), verde=césped(G), amarillo=desierto(D, solo Nivel 3),
    negro=muro(W). El desierto no se ve hasta el Nivel 3.
 ================================================= */
-const MAP_W = 48, MAP_H = 13;
+const MAP_W = 32, MAP_H = 36;
 /* Cámara: solo se ve una ventana del mapa, centrada en tu personaje (así se ve grande) */
 const VIEW_W = 16, VIEW_H = 13, TS = 34;
 function camOffset(){
@@ -172,21 +339,72 @@ function camOffset(){
   return { camX, camY };
 }
 /* Píxeles de césped que sobresalen dentro del desierto (borde natural) */
-const GREEN_PIXELS = new Set(['24,1','25,1','25,3','26,2','26,3','26,4','27,3','27,4','27,8','28,7','28,8','28,10','29,6','29,8','29,9','30,3','30,7','30,9']);
+// Mapa de la isla (según la imagen): agua (W) alrededor, bosque verde oscuro (B)
+// en el borde izquierdo y abajo, césped (G) en el centro, desierto amarillo (D)
+// a la derecha y la tienda (S) en el centro. 48 columnas x 13 filas.
+const MAP = [
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWBBBBBBBDDDDDDWWWWWWWWWW',
+  'WWWWWWWWWBBBBBBBDDDDDDWWWWWWWWWW',
+  'WWWWWWWWBBBBBBBDDDDDDDDDDDDWWWWW',
+  'WWWWWWWBBBBBBBBDDDDDDDDDDDDDWWWW',
+  'WWWWWWWBBBBBBBBDDDDDDDDDDDDDWWWW',
+  'WWWWWWBBBBBGGGGGGGGDDDDDDDDDWWWW',
+  'WWWWWWBBBBGGGGGGGGGGDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBBGGGGGGGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBGGGGGSSGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBGGGGGSSGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBGGGGGGGGGGGDDDDDDDDWWWW',
+  'WWWWBBBBBGGGGGGGGGGGDDDDDDDDWWWW',
+  'WWWWBBBBBGGGGGGGGGGDDDDDDDDDWWWW',
+  'WWWWBBBBBGGGGGGGGGGDDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGDDDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGDDDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGDDDDDDDDDDWWWW',
+  'WWWWBBBBBBBBBBDDDDDDDDDDDDDWWWWW',
+  'WWWWBBBBBBBBBBBBBBBDDDDDDDWWWWWW',
+  'WWWWBBBBBBBBBBBBBBBDDDDDDDWWWWWW',
+  'WWWWBBBBBBBBBBBBBBBBBBBBBWWWWWWW',
+  'WWWWWWBBBBBBBBBBBBBBBBBBBWWWWWWW',
+  'WWWWWWBBBBBBBBBBBBBBBBBBBWWWWWWW',
+  'WWWWWWWBBBBBBBBBBBBBBBBBWWWWWWWW',
+  'WWWWWWWWWBBBBBBBBBBBBBBWWWWWWWWW',
+  'WWWWWWWWWWWWWWBBBBBBWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWBBBBBBWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+];
 function tileAt(x, y){
-  if (x >= MAP_W-1) return 'W';                   // borde negro (col 47)
-  if (x === 0) return (y>=4 && y<=8) ? 'S' : 'G'; // tienda marrón (col 0, filas 4-8)
-  if (GREEN_PIXELS.has(x+','+y)) return 'G';
-  if (x >= 24) return 'D';                        // desierto amarillo
-  return 'G';                                     // césped
+  if (y < 0 || y >= MAP_H || x < 0 || x >= MAP_W) return 'W';
+  return MAP[y][x];
 }
 function desertVisible(){ return getLevel() >= 3; }
+function forestVisible(){ return getLevel() >= 7; }
+// Bosque: solo gases nuevos, tabla ponderada (C 35%, N 25%, O 20%, F 15%, Ne 5%)
+function pickForestFoe(){
+  const r = Math.random();
+  if (r < 0.35) return 'carbon';
+  if (r < 0.60) return 'nitrogen';
+  if (r < 0.80) return 'oxygen';
+  if (r < 0.95) return 'fluorine';
+  return 'neon';
+}
 function tileColor(t, x, y){
   if (t === 'S') return '#7a4a1e';
-  if (t === 'W') return '#05070f';
+  if (t === 'W') return ((x+y)%2===0) ? '#2e5aa8' : '#3366bb'; // agua
   if (t === 'D'){
     if (!desertVisible()) return '#0e1524';        // niebla: no se ve el desierto
     return ((x+y)%2===0) ? '#e0bd57' : '#e9c96a';
+  }
+  if (t === 'B'){
+    if (!forestVisible()) return '#0e1524';        // niebla: no se ve el bosque
+    return ((x+y)%2===0) ? '#145a2a' : '#17662f';  // bosque verde oscuro
   }
   return ((x+y)%2===0) ? '#2b8f4a' : '#2f9e52';    // césped (tablero suave)
 }
@@ -981,11 +1199,11 @@ function applyReward(r){
 function openBestiary(){
   const cards = Object.keys(WILD_FOES).map(key => {
     const f = WILD_FOES[key];
-    const pct = pctFmt(f.spawnChance || f.spawnDesert);
+    const pct = f.spawnForest ? f.spawnForest : pctFmt(f.spawnChance || f.spawnDesert);
     return `<div class="card" style="flex:1; min-width:150px; text-align:center; background:#0a0e28; cursor:pointer;" onclick="bestiaryDetail('${key}')">
       <div style="display:flex; justify-content:center; margin-bottom:6px;">${foeBall(f,54)}</div>
       <p><b>${f.label}</b></p>
-      <p class="muted" style="font-size:.78rem;">Aparición: <b class="gold">${pct}%</b> por paso</p>
+      <p class="muted" style="font-size:.78rem;">${f.spawnForest?'En bosque':'Aparición'}: <b class="gold">${pct}%</b> ${f.spawnForest?'de encuentros':'por paso'}</p>
       <p class="muted" style="font-size:.72rem; margin-top:4px;">Click para ver estadísticas</p>
     </div>`;
   }).join('');
@@ -1021,6 +1239,7 @@ function bestiaryDetail(key){
       <p style="color:var(--accent);"><b> Probabilidades</b></p>
       ${f.spawnChance?`<p> Aparición en césped: <b class="gold">${pctFmt(f.spawnChance)}%</b> por paso</p>`:''}
       ${f.spawnDesert?`<p> En el desierto: <b class="gold">${pctFmt(f.spawnDesert)}%</b> por paso</p>`:''}
+      ${f.spawnForest?`<p> En el bosque (Nivel 7): <b class="gold">${f.spawnForest}%</b> de los encuentros</p>`:''}
       <p> Botín raro al vencer: <b>${bonusPct}%</b></p>
     </div>
     <div class="card" style="margin-top:12px; background:#0a0e28; line-height:1.8;">
@@ -1285,8 +1504,10 @@ function startWorldLoop(){
         <canvas id="world" width="${cw}" height="${ch}" style="background:#0a1f12; border:2px solid var(--panel2); border-radius:12px; max-width:100%;"></canvas>
         <div class="row" style="gap:12px; font-size:.78rem; color:var(--muted); flex-wrap:wrap;">
           <span><span style="display:inline-block;width:11px;height:11px;background:#2f9e52;border-radius:2px;vertical-align:middle;"></span> Césped</span>
+          <span><span style="display:inline-block;width:11px;height:11px;background:#3366bb;border-radius:2px;vertical-align:middle;"></span> Agua</span>
           <span><span style="display:inline-block;width:11px;height:11px;background:#7a4a1e;border-radius:2px;vertical-align:middle;"></span> Tienda</span>
           <span><span style="display:inline-block;width:11px;height:11px;background:${desertVisible()?'#e9c96a':'#0e1524'};border-radius:2px;vertical-align:middle;"></span> Desierto ${desertVisible()?'(Nivel 3)':' Nivel 3'}</span>
+          <span><span style="display:inline-block;width:11px;height:11px;background:${forestVisible()?'#17662f':'#0e1524'};border-radius:2px;vertical-align:middle;"></span> Bosque ${forestVisible()?'(Nivel 7)':' Nivel 7'}</span>
         </div>
       </div>
       <div id="leaderboard" style="width:300px; max-width:100%; flex:0 0 auto; overflow:auto;"></div>
@@ -1409,8 +1630,9 @@ function tryMove(dx, dy){
   const ny = Math.max(0, Math.min(WORLD.H - 1, me.ty + dy));
   if (nx === me.tx && ny === me.ty) return;
   const t = tileAt(nx, ny);
-  if (t === 'W'){ toast(' Un muro bloquea el paso.'); return; }
+  if (t === 'W'){ toast(' El agua rodea la isla, no puedes nadar.'); return; }
   if (t === 'D' && getLevel() < 3){ toast(' El desierto solo se abre al alcanzar el Nivel 3.'); return; }
+  if (t === 'B' && getLevel() < 7){ toast(' El bosque solo se abre al alcanzar el Nivel 7.'); return; }
   me.tx = nx; me.ty = ny;              // movimiento optimista
   socket.emit('move', { tx: nx, ty: ny }); // el servidor confirma y difunde
   state.steps++;
@@ -1426,6 +1648,7 @@ function tryMove(dx, dy){
   else if (t === 'G' && Math.random() < 0.001*LM) triggerEncounter('lithium');   // Litio salvaje: 0,1% en césped
   else if (t === 'D' && Math.random() < 0.005*LM) triggerEncounter('beryllium');   // Berilio salvaje: 0,5% en el desierto
   else if (t === 'D' && Math.random() < 0.03*LM) triggerEncounter('lithium');   // Litio salvaje: 3% en el desierto
+  else if (t === 'B' && Math.random() < 0.08*LM) triggerEncounter(pickForestFoe()); // Bosque: solo gases nuevos (tabla ponderada C35/N25/O20/F15/Ne5)
   else if (Math.random() < 0.01*LM) triggerEncounter('helium');
   else if (Math.random() < 0.05*LM) triggerEncounter('hydrogen');
 }
@@ -1632,8 +1855,8 @@ let battle = null;
 function openModal(html){
   closeModal();
   const d = document.createElement('div'); d.id = 'modal';
-  d.innerHTML = `<div style="background:var(--panel);border:2px solid var(--panel2);border-radius:16px;padding:22px;max-width:760px;width:100%;max-height:92%;overflow:auto;">${html}</div>`;
-  G.appendChild(d);
+  d.innerHTML = `<div style="background:var(--panel);border:2px solid var(--panel2);border-radius:16px;padding:22px;max-width:760px;width:100%;margin:auto;">${html}</div>`;
+  document.body.appendChild(d);
 }
 function closeModal(){ const m = document.getElementById('modal'); if (m) m.remove(); }
 
@@ -1653,7 +1876,8 @@ function startBattle(foeType){
   const units = party.map(key => {
     const c = COMBATANTS[key];
     return {key:key, label:c.label, icon:c.icon, hp:c.hp, max:c.hp, atk:c.atk, dodge:c.dodge,
-            ability:c.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0};
+            ability:c.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0,
+            frozenTurns:0, atkMod:0, atkModTurns:0, cation:false};
   });
   const u0 = units[0];
   battle = {
@@ -1661,7 +1885,7 @@ function startBattle(foeType){
     foeInfo: f,
     units: units,
     active: 0,
-    foe: { hp:f.hp*sm, max:f.hp*sm, atk:f.atk*sm, dodge:f.dodge, label:f.label, icon:f.icon },
+    foe: { hp:f.hp*sm, max:f.hp*sm, atk:f.atk*sm, dodge:f.dodge, label:f.label, icon:f.icon, inertTurns:f.inert||0 },
     turn:1, over:false, win:false,
     log:[` ¡Un ${f.label} salvaje apareció! Envías a ${u0.label} ${u0.icon}${units.length>1?` (equipo de ${units.length})`:''}.`]
   };
@@ -1673,6 +1897,13 @@ function startBattle(foeType){
       letter:cf.letter, gradient:cf.gradient, textColor:cf.textColor, icon:cf.icon, alive:true };
     battle.target = 'foe';
     blog(` El ${f.label} viene acompañado de un ${cf.label} ${cf.letter}. ¡Dos enemigos!`);
+  }
+  if (f.carbonComp){
+    const rc = rollCarbonCompanions(sm);
+    battle.companions = rc.comps;
+    battle.carbonMol = rc.mol;
+    battle.target = 'foe';
+    if (battle.companions.length) blog(` ¡El Carbono se enlaza como ${battle.carbonMol}! Trae ${battle.companions.length} acompañante${battle.companions.length===1?'':'s'}: ${battle.companions.map(c=>c.label).join(', ')}.`);
   }
   renderBattle();
 }
@@ -1694,6 +1925,7 @@ function berylliumSplit(u){
   // segundo Helio
   const he2 = { key:t.key, label:pref+t.label, icon:t.icon, hp:halfHp, max:t.hp, atk:t.atk, dodge:t.dodge,
     ability:t.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0,
+    frozenTurns:0, atkMod:0, atkModTurns:0, cation:false,
     ownerId:owner, ownerName:oname, avatar:null };
   b.units.splice(idx+1, 0, he2);
   // remapear índices activos por dueño tras el splice
@@ -1741,6 +1973,7 @@ function foeBox(o, info, opts){
     <div style="width:52px;height:52px;border-radius:50%;margin:6px auto;background:${o.gradient||info.gradient};display:flex;align-items:center;justify-content:center;font-weight:800;color:${o.textColor||info.textColor};">${o.letter||info.letter}</div>
     <div style="background:#003;border-radius:8px;overflow:hidden;height:12px;"><div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
     <p class="muted" style="font-size:.74rem;">${Math.max(0,o.hp)}/${o.max}</p>
+    ${foeStatusHtml(o)}
     ${btn}
   </div>`;
 }
@@ -1750,9 +1983,10 @@ function renderBattle(){
   const u = b.units[b.active];
   const pPct = Math.min(100, Math.max(0, u.hp / u.max * 100));
   const hPct = Math.max(0, b.foe.hp / b.foe.max * 100);
-  const canAbility = u.abilityReady && !b.over;
-  const cd = u.ability.every - (u.actCount % u.ability.every);
-  const abilityLabel = canAbility ? `${u.ability.icon} ${u.ability.name}` : `${u.ability.icon} ${u.ability.name} ${cd}`;
+  const isPassive = !!(u.ability && u.ability.passive);
+  const canAbility = !isPassive && u.abilityReady && !b.over;
+  const cd = isPassive ? 0 : (u.ability.every - (u.actCount % u.ability.every));
+  const abilityLabel = isPassive ? `${u.ability.icon} ${u.ability.name} (pasiva)` : (canAbility ? `${u.ability.icon} ${u.ability.name}` : `${u.ability.icon} ${u.ability.name} ${cd}`);
   const meVisual = u.key === 'proton'
     ? `<img src="${avatarDataURL(u.avatar||state.avatar,3)}" style="width:70px;height:70px;background:#0a0e28;border-radius:8px;margin:8px 0;">`
     : (unitBall(u.key,70)
@@ -1783,10 +2017,15 @@ function renderBattle(){
         ${meVisual}
         <div style="background:#300;border-radius:8px;overflow:hidden;height:14px;"><div style="height:100%;width:${pPct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
         <p class="muted"> ${Math.max(0,u.hp)}/${u.max}</p>
+        ${unitStatusHtml(u)}
       </div>
       <div style="align-self:center; font-size:1.4rem;">VS</div>
       <div class="card" style="flex:1; text-align:center;">
-        ${b.companion ? `
+        ${(b.companions && b.companions.length) ? `
+        <div class="row" style="gap:8px; align-items:stretch; justify-content:center; flex-wrap:wrap;">
+          ${foeBox(b.foe, b.foeInfo, {selected:(curTarget()===b.foe), tkey:'foe', over:b.over, spectator:spectator})}
+          ${b.companions.map((c,i)=>foeBox(c, c, {selected:(curTarget()===c), tkey:'comp'+i, over:b.over, spectator:spectator})).join('')}
+        </div>` : b.companion ? `
         <div class="row" style="gap:8px; align-items:stretch; justify-content:center;">
           ${foeBox(b.foe, b.foeInfo, {selected:(b.target!=='comp'), tkey:'foe', over:b.over, spectator:spectator})}
           ${foeBox(b.companion, b.foeInfo, {selected:(b.target==='comp'), tkey:'comp', over:b.over, spectator:spectator})}
@@ -1794,7 +2033,7 @@ function renderBattle(){
         <p><b>${b.foe.icon} ${b.foe.label.toUpperCase()}</b></p>
         <div style="width:70px;height:70px;border-radius:50%;margin:8px auto;background:${b.foeInfo.gradient};display:flex;align-items:center;justify-content:center;font-weight:800;color:${b.foeInfo.textColor};">${b.foeInfo.letter}</div>
         <div style="background:#003;border-radius:8px;overflow:hidden;height:14px;"><div style="height:100%;width:${hPct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
-        <p class="muted"> ${Math.max(0,b.foe.hp)}/${b.foe.max}</p>`}
+        <p class="muted"> ${Math.max(0,b.foe.hp)}/${b.foe.max}</p>${foeStatusHtml(b.foe)}`}
         ${switchBtns? `<div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"><p class="muted" style="font-size:.7rem;">Cambiar (cuesta el turno):</p>${switchBtns}</div>` : ''}
       </div>
     </div>
@@ -1816,7 +2055,15 @@ function pAct(kind){
   }
   if (b.spectator) return;
   const u = b.units[b.active];
+  if (u.frozenTurns > 0){
+    blog(` Tu ${u.label} está CONGELADO y pierde el turno. (${u.frozenTurns} turno${u.frozenTurns===1?'':'s'} restante${u.frozenTurns===1?'':'s'})`);
+    u.frozenTurns--;
+    setTimeout(enemyTurn, 400);
+    renderBattle();
+    return;
+  }
   if (kind === 'ability' && !u.abilityReady) return;
+  if (kind === 'ability' && u.ability.passive) return; // habilidades pasivas no se activan manualmente
   if (kind === 'ability' && u.ability.immune){
     // habilidad defensiva: se vuelve inmune durante los próximos turnos
     u.immuneTurns = u.ability.immuneTurns || 3;
@@ -1847,8 +2094,10 @@ function pAct(kind){
     const eDmg = u.ability.dmg;
     sfxBoomBig(); shakeEl(null, 20, 600);
     blog(` ${u.label} usa ${u.ability.name} ${u.ability.icon} — ¡FISIÓN! ${eDmg} de daño a los enemigos.`);
-    b.foe.hp -= eDmg;
+    if (b.foe.inertTurns > 0){ blog(` El ${b.foe.label} es INERTE: no recibe daño. (0) (inmune ${b.foe.inertTurns} turno${b.foe.inertTurns===1?'':'s'} más)`); }
+    else b.foe.hp -= eDmg;
     if (b.companion && b.companion.alive) b.companion.hp -= eDmg;
+    if (b.companions) b.companions.forEach(c=>{ if(c.alive && c.hp>0) c.hp -= eDmg; });
     const aDmg = u.ability.allyDmg || 0;
     if (aDmg){
       blog(` La reacción golpea a TODO tu equipo: ${aDmg} de daño a cada unidad.`);
@@ -1859,7 +2108,8 @@ function pAct(kind){
     if (b.companion && b.companion.alive && b.companion.hp <= 0){ b.companion.hp=0; b.companion.alive=false; blog(` ¡El acompañante ${b.companion.label} fue derrotado!`); if (b.target==='comp') b.target='foe'; }
     if (b.foe.hp < 0) b.foe.hp = 0;
     if (b.foe.hp <= 0 && b.companion && b.companion.alive){ b.target='comp'; }
-    const foeDown = b.foe.hp<=0; const compDown = !b.companion || !b.companion.alive;
+    if (b.companions) b.companions.forEach(c=>{ if(c.alive && c.hp<=0){ c.hp=0; c.alive=false; blog(` ¡${c.label} derrotado!`); } });
+    const foeDown = b.foe.hp<=0; const compDown = (!b.companion || !b.companion.alive) && (!b.companions || b.companions.every(c=>!c.alive||c.hp<=0));
     if (foeDown && compDown){ b.foe.hp=0; b.over=true; b.win=true; blog(` ¡${b.foe.label} derrotado!`);
       const db=b.foeInfo.deathBlast; if(db){ blog(` ¡${b.foe.label} explota al morir! ${db} de daño a TODO tu equipo.`); sfxBoomBig(); shakeEl(null,22,650); b.units.forEach(x=>{ if(x.alive){ x.hp-=db; if(x.hp<=0){x.hp=0;x.alive=false;} } }); }
       sfxVictory(); renderBattle(); return; }
@@ -1871,12 +2121,40 @@ function pAct(kind){
     renderBattle();
     return;
   }
-  const dmg = kind === 'ability' ? u.ability.dmg : u.atk;
+  let dmg = kind === 'ability' ? u.ability.dmg : u.atk;
+  if (u.atkModTurns > 0) dmg = Math.max(1, Math.round(dmg * (1 + u.atkMod)));
   const nm = kind === 'ability' ? `${u.ability.name} ${u.ability.icon}` : 'Ataque ';
-  const tgt = (b.companion && b.companion.alive && b.target==='comp') ? b.companion : b.foe;
   sfxSlash(); shakeEl();
-  if (Math.random() < tgt.dodge){ blog(`${u.label} usa ${nm}…  ¡el ${tgt.label} esquivó! (0)`); }
-  else { tgt.hp -= dmg; blog(`${u.label} usa ${nm} → ${dmg} de daño a ${tgt.label}.`); }
+  let strikes = 1;
+  if(kind==='attack' && u.key==='carbon'){
+    const r=Math.random();
+    strikes = r<0.10 ? 3 : (r<0.60 ? 2 : 1);
+    if(strikes>1) blog(` ⚔️ ${u.label} desata Ataque múltiple: ${strikes} golpes seguidos.`);
+  }
+  for(let s=0;s<strikes;s++){
+    const tgt = (b.companions && b.companions.length) ? curTarget() : ((b.companion && b.companion.alive && b.target==='comp') ? b.companion : b.foe);
+    if(!tgt || tgt.hp<=0 || tgt.alive===false) break;
+    if (Math.random() < tgt.dodge){ blog(`${u.label} usa ${nm}…  ¡el ${tgt.label} esquivó! (0)`); }
+    else if (tgt.inertTurns > 0){ blog(`${u.label} usa ${nm}… pero ${tgt.label} es INERTE y no recibe daño. (0)`); }
+    else { tgt.hp -= dmg; blog(`${u.label} usa ${nm} → ${dmg} de daño a ${tgt.label}.`); }
+    if (b.companion && b.companion.alive && b.companion.hp <= 0){ b.companion.hp=0; b.companion.alive=false; blog(` ¡El acompañante ${b.companion.label} fue derrotado!`); if (b.target==='comp') b.target='foe'; }
+    if (b.companions) b.companions.forEach(c=>{ if(c.alive && c.hp<=0){ c.hp=0; c.alive=false; blog(` ¡${c.label} derrotado!`); } });
+    if (b.foe.hp<=0 && b.companion && b.companion.alive){ b.target='comp'; }
+  }
+  if(kind==='attack' && u.key==='nitrogen'){
+    if((u.freezeCd||0)<=0 && Math.random()<0.10){
+      const aliveE=[]; if(b.foe && b.foe.hp>0 && b.foe.alive!==false) aliveE.push(b.foe);
+      if(b.companion && b.companion.alive && b.companion.hp>0) aliveE.push(b.companion);
+      (b.companions||[]).forEach(c=>{ if(c.alive!==false && c.hp>0) aliveE.push(c); });
+      if(aliveE.length){
+        const ft=aliveE[Math.floor(Math.random()*aliveE.length)];
+        ft.frozenTurns=Math.max(ft.frozenTurns||0,5);
+        u.freezeCd=10;
+        blog(` ❄️ ${u.label} usa Congelación: ${ft.label} queda CONGELADO 5 turnos. (enfriamiento 10 turnos)`);
+        sfxHit();
+      }
+    }
+  }
   if (kind === 'ability'){
     u.abilityReady = false;
     if (u.ability.selfDmg){
@@ -1899,11 +2177,12 @@ function pAct(kind){
     blog(` ¡El acompañante ${b.companion.label} fue derrotado!`);
     if (b.target === 'comp') b.target = 'foe';
   }
+  if (b.companions) b.companions.forEach(c=>{ if(c.alive && c.hp<=0){ c.hp=0; c.alive=false; blog(` ¡${c.label} derrotado!`); } });
   if (b.foe.hp < 0) b.foe.hp = 0;
   // el Boro cae pero si su acompañante sigue vivo, la batalla continúa
   if (b.foe.hp <= 0 && b.companion && b.companion.alive){ b.target = 'comp'; }
   const foeDown = b.foe.hp <= 0;
-  const compDown = !b.companion || !b.companion.alive;
+  const compDown = (!b.companion || !b.companion.alive) && (!b.companions || b.companions.every(c=>!c.alive||c.hp<=0));
   if (foeDown && compDown){ b.foe.hp = 0; b.over = true; b.win = true; blog(` ¡${b.foe.label} derrotado!`);
     const db = b.foeInfo.deathBlast;
     if(db){
@@ -1926,9 +2205,37 @@ function foeAoe(dmg){
   if(!b.units[b.active].alive){ autoSwitch(); }
   return false;
 }
+function boronReact(u){
+  const b=battle;
+  if(!u || u.key!=='boron' || u.hp<=0 || b.over) return;
+  const ab=u.ability||{};
+  if(Math.random() >= (ab.onHitChance||0.20)) return;
+  const heal=ab.healAlly||15;
+  const allies=b.units.filter(x=>x.alive);
+  let ally = allies.filter(x=>x!==u).sort((a,c)=> (a.hp/a.max)-(c.hp/c.max))[0] || u;
+  ally.hp=Math.min(ally.max, ally.hp+heal);
+  blog(` ⚛️ ${u.label} expulsa un protón y se lo da a ${ally.label}: +${heal} HP.`);
+  const eDmg=ab.electronDmg||20;
+  const aliveE=[]; if(b.foe && b.foe.hp>0 && b.foe.alive!==false) aliveE.push(b.foe);
+  if(b.companion && b.companion.alive && b.companion.hp>0) aliveE.push(b.companion);
+  (b.companions||[]).forEach(c=>{ if(c.alive!==false && c.hp>0) aliveE.push(c); });
+  const tgt=aliveE[0];
+  if(tgt){
+    tgt.hp-=eDmg;
+    blog(` ⚡ El electrón de ${u.label} golpea a ${tgt.label}: ${eDmg} de daño.`);
+    sfxHit();
+    if(tgt.hp<=0){ tgt.hp=0; tgt.alive=false; blog(` ¡${tgt.label} derrotado!`); }
+  }
+}
 function enemyTurn(){
   const b = battle; if (b.over) return;
+  if (b.companions && b.companions.length){ return enemyTurnMulti(); }
   if (b.companion !== undefined){ return enemyTurnBoro(); }
+  statusTick();
+  if (b.foe.frozenTurns > 0){
+    blog(` ❄️ ${b.foe.label} está CONGELADO y pierde el turno. (${b.foe.frozenTurns} turno${b.foe.frozenTurns===1?'':'s'} restante${b.foe.frozenTurns===1?'':'s'})`);
+    b.turn++; renderBattle(); return;
+  }
   const fa = b.foeInfo.foeAbility;
   // habilidad de área: explosión pequeña a TODO el equipo (sustituye al ataque normal)
   if (fa && fa.type==='aoe' && Math.random() < fa.chance){
@@ -1937,12 +2244,20 @@ function enemyTurn(){
     if(foeAoe(fa.dmg)) return;
     b.turn++; renderBattle(); return;
   }
+  // habilidades de estado (Oxígeno beta / Nitrógeno congela / Flúor drena) — sustituyen al ataque normal
+  if (fa && (fa.type==='beta' || fa.type==='freeze' || fa.type==='drain') && Math.random() < fa.chance){
+    const alive = b.units.filter(x=>x.alive);
+    applyFoeStatus(fa, alive);
+    if (b.units.every(x=>!x.alive)){ b.over=true; b.win=false; blog(` Todas tus unidades cayeron…`); renderBattle(); return; }
+    if (!b.units[b.active] || !b.units[b.active].alive){ autoSwitch(); }
+    b.turn++; renderBattle(); return;
+  }
   const u = b.units[b.active];
   if (u.immuneTurns > 0){
     u.immuneTurns--;
     blog(` ¡Neutralizado! Tu ${u.label} es inmune al ataque del ${b.foe.label}. (0)` + (u.immuneTurns>0?` (inmunidad: ${u.immuneTurns} turno${u.immuneTurns===1?'':'s'} más)`:''));
   } else if (Math.random() < u.dodge){ blog(`${b.foe.label} ataca…  ¡tu ${u.label} esquivó! (0)`); }
-  else { u.hp -= b.foe.atk; blog(`${b.foe.label} ataca → ${b.foe.atk} de daño.`); sfxHit(); shakeEl(); }
+  else { const atk = foeAtkVal(b.foe.atk, fa); u.hp -= atk; blog(`${b.foe.label} ataca → ${atk} de daño.`); sfxHit(); shakeEl(); boronReact(u); }
   if (u.hp <= 0){
     u.hp = 0; u.alive = false; blog(` Tu ${u.label} cayó…`);
     if(!autoSwitch()){ b.over = true; b.win = false; renderBattle(); return; }
@@ -1984,7 +2299,7 @@ function enemyTurnBoro(){
     if (b.over || !u.alive) return;
     if (immuneThisTurn){ blog(` ¡Neutralizado! ${u.label} es inmune al ataque de ${a.label}. (0)`); return; }
     if (Math.random() < u.dodge){ blog(`${a.label} ataca…  ¡tu ${u.label} esquivó! (0)`); return; }
-    u.hp -= a.atk; blog(`${a.label} ataca → ${a.atk} de daño.`); sfxHit(); shakeEl();
+    u.hp -= a.atk; blog(`${a.label} ataca → ${a.atk} de daño.`); sfxHit(); shakeEl(); boronReact(u);
   });
   if (immuneThisTurn){ blog(` (Inmunidad de Neutralizar: ${u.immuneTurns} turno${u.immuneTurns===1?'':'s'} restante${u.immuneTurns===1?'':'s'}.)`); }
   if (u.hp <= 0){
@@ -2073,10 +2388,14 @@ function serializeBattle(){
   const b = battle;
   return {
     turn:b.turn, over:b.over, win:b.win, active:b.active, foeType:b.foeType,
-    foe:{hp:b.foe.hp, max:b.foe.max, label:b.foe.label, icon:b.foe.icon},
+    foe:{hp:b.foe.hp, max:b.foe.max, label:b.foe.label, icon:b.foe.icon, inertTurns:b.foe.inertTurns||0},
     companion: b.companion ? { hp:b.companion.hp, max:b.companion.max, label:b.companion.label,
       letter:b.companion.letter, gradient:b.companion.gradient, textColor:b.companion.textColor,
       icon:b.companion.icon, alive:b.companion.alive } : null,
+    companions: b.companions ? b.companions.map(c=>({ key:c.key, hp:c.hp, max:c.max, atk:c.atk, dodge:c.dodge, label:c.label,
+      letter:c.letter, gradient:c.gradient, textColor:c.textColor, icon:c.icon, alive:c.alive,
+      foeAbility:c.foeAbility||null, inertTurns:c.inertTurns||0 })) : null,
+    carbonMol: b.carbonMol || null,
     target: b.target || 'foe',
     players: b.players || null,
     turnOwner: b.turnOwner || null,
@@ -2084,7 +2403,7 @@ function serializeBattle(){
     activeByOwner: b.activeByOwner || null,
     units:b.units.map(u => ({ key:u.key, label:u.label, icon:u.icon, hp:u.hp, max:u.max, alive:u.alive,
       avatar:u.avatar||null, ownerId:u.ownerId||null, ownerName:u.ownerName||null,
-      immuneTurns:u.immuneTurns||0, abilityReady:!!u.abilityReady, actCount:u.actCount||0,
+      immuneTurns:u.immuneTurns||0, frozenTurns:u.frozenTurns||0, atkMod:u.atkMod||0, atkModTurns:u.atkModTurns||0, cation:!!u.cation, abilityReady:!!u.abilityReady, actCount:u.actCount||0,
       abilityIcon:(u.ability&&u.ability.icon)||'', abilityName:(u.ability&&u.ability.name)||'',
       abilityEvery:(u.ability&&u.ability.every)||1 })),
     log:b.log
@@ -2138,7 +2457,13 @@ function applyGroupAction(ownerId, action){
 // Efecto de una acción de unidad (solo host). No gestiona el paso de turno.
 function gUnitAction(u, kind){
   const b = battle;
+  if (u.frozenTurns > 0){
+    blog(` ${u.label} está CONGELADO y pierde el turno. (${u.frozenTurns} turno${u.frozenTurns===1?'':'s'} restante${u.frozenTurns===1?'':'s'})`);
+    u.frozenTurns--;
+    return;
+  }
   if (kind === 'ability' && !u.abilityReady) kind = 'attack';
+  if (kind === 'ability' && u.ability.passive) kind = 'attack';
   if (kind === 'ability' && u.ability.immune){
     u.immuneTurns = u.ability.immuneTurns || 3; u.abilityReady = false;
     blog(` ${u.label} usa ${u.ability.name} — inmune ${u.immuneTurns} turnos.`);
@@ -2155,7 +2480,8 @@ function gUnitAction(u, kind){
     const eDmg = u.ability.dmg;
     sfxBoomBig(); shakeEl(null, 20, 600);
     blog(` ${u.label} usa ${u.ability.name} ${u.ability.icon} — ¡FISIÓN! ${eDmg} de daño a los enemigos.`);
-    b.foe.hp -= eDmg;
+    if (b.foe.inertTurns > 0){ blog(` El ${b.foe.label} es INERTE: no recibe daño. (0) (inmune ${b.foe.inertTurns} turno${b.foe.inertTurns===1?'':'s'} más)`); }
+    else b.foe.hp -= eDmg;
     if (b.companion && b.companion.alive) b.companion.hp -= eDmg;
     const aDmg = u.ability.allyDmg || 0;
     if (aDmg){
@@ -2173,12 +2499,38 @@ function gUnitAction(u, kind){
     if (u.alive){ berylliumSplit(u); }
     return;
   }
-  const dmg = kind === 'ability' ? u.ability.dmg : u.atk;
+  let dmg = kind === 'ability' ? u.ability.dmg : u.atk;
+  if (u.atkModTurns > 0) dmg = Math.max(1, Math.round(dmg * (1 + u.atkMod)));
   const nm = kind === 'ability' ? `${u.ability.name} ${u.ability.icon}` : 'Ataque ';
-  const tgt = (b.companion && b.companion.alive && b.target==='comp') ? b.companion : b.foe;
   sfxSlash(); shakeEl();
-  if (Math.random() < tgt.dodge){ blog(`${u.label} usa ${nm}…  ¡el ${tgt.label} esquivó! (0)`); }
-  else { tgt.hp -= dmg; blog(`${u.label} usa ${nm} → ${dmg} de daño a ${tgt.label}.`); }
+  let strikes = 1;
+  if(kind==='attack' && u.key==='carbon'){
+    const r=Math.random();
+    strikes = r<0.10 ? 3 : (r<0.60 ? 2 : 1);
+    if(strikes>1) blog(` ⚔️ ${u.label} desata Ataque múltiple: ${strikes} golpes seguidos.`);
+  }
+  for(let s=0;s<strikes;s++){
+    const tgt = (b.companion && b.companion.alive && b.target==='comp') ? b.companion : b.foe;
+    if(!tgt || tgt.hp<=0 || tgt.alive===false) break;
+    if (Math.random() < tgt.dodge){ blog(`${u.label} usa ${nm}…  ¡el ${tgt.label} esquivó! (0)`); }
+    else if (tgt === b.foe && b.foe.inertTurns > 0){ blog(`${u.label} usa ${nm}… pero el ${tgt.label} es INERTE y no recibe daño. (0)`); }
+    else { tgt.hp -= dmg; blog(`${u.label} usa ${nm} → ${dmg} de daño a ${tgt.label}.`); }
+    if (b.companion && b.companion.alive && b.companion.hp <= 0){ b.companion.hp=0; b.companion.alive=false; blog(` ¡El acompañante ${b.companion.label} fue derrotado!`); if (b.target==='comp') b.target='foe'; }
+    if (b.foe.hp<=0 && b.companion && b.companion.alive){ b.target='comp'; }
+  }
+  if(kind==='attack' && u.key==='nitrogen'){
+    if((u.freezeCd||0)<=0 && Math.random()<0.10){
+      const aliveE=[]; if(b.foe && b.foe.hp>0 && b.foe.alive!==false) aliveE.push(b.foe);
+      if(b.companion && b.companion.alive && b.companion.hp>0) aliveE.push(b.companion);
+      if(aliveE.length){
+        const ft=aliveE[Math.floor(Math.random()*aliveE.length)];
+        ft.frozenTurns=Math.max(ft.frozenTurns||0,5);
+        u.freezeCd=10;
+        blog(` ❄️ ${u.label} usa Congelación: ${ft.label} queda CONGELADO 5 turnos. (enfriamiento 10 turnos)`);
+        sfxHit();
+      }
+    }
+  }
   if (kind === 'ability'){
     u.abilityReady = false;
     if (u.ability.selfDmg){ u.hp -= u.ability.selfDmg; blog(` ${u.label} pierde ${u.ability.selfDmg} HP por el esfuerzo.`); }
@@ -2253,24 +2605,40 @@ function groupEnemyTurn(){
     blog(`${fa.icon} ¡${b.foe.label} provoca ${fa.name}! ${fa.dmg} a TODO el equipo.`);
     sfxBoomSmall(); shakeEl();
     b.units.forEach(x=>{ if(x.alive){ if(x.immuneTurns>0){ blog(` ${x.label} es inmune. (0)`); } else { x.hp-=fa.dmg; if(x.hp<=0){ x.hp=0; x.alive=false; blog(` ${x.label} cayó por la explosión.`); } } } });
+  } else if (fa && (fa.type==='beta' || fa.type==='freeze' || fa.type==='drain') && Math.random() < fa.chance){
+    applyFoeStatus(fa, b.units.filter(x=>x.alive));
   } else {
     const foes = [];
-    if (b.foe.hp > 0) foes.push({label:b.foe.label, atk:b.foe.atk});
-    if (b.companion && b.companion.alive) foes.push({label:b.companion.label, atk:b.companion.atk});
+    if (b.foe.hp > 0) foes.push({label:b.foe.label, atk:b.foe.atk, isFoe:true, src:b.foe});
+    if (b.companion && b.companion.alive) foes.push({label:b.companion.label, atk:b.companion.atk, isFoe:false, src:b.companion});
     let attackers;
     if (b.companion !== undefined){ attackers = foes.filter(()=>Math.random()<0.7); if(!attackers.length && foes.length) attackers=[foes[Math.floor(Math.random()*foes.length)]]; }
     else attackers = foes;
     attackers.forEach(a => {
+      if (a.src && a.src.frozenTurns > 0){ blog(` ❄️ ${a.label} está CONGELADO y no puede atacar. (${a.src.frozenTurns} restante${a.src.frozenTurns===1?'':'s'})`); return; }
       const alive = b.units.filter(x=>x.alive); if(!alive.length) return;
       const tgt = alive[Math.floor(Math.random()*alive.length)];
       if (tgt.immuneTurns>0){ blog(` ¡Neutralizado! ${tgt.label} es inmune al ataque de ${a.label}. (0)`); return; }
       if (Math.random() < tgt.dodge){ blog(`${a.label} ataca a ${tgt.label}…  ¡esquivó! (0)`); return; }
-      tgt.hp -= a.atk; blog(`${a.label} ataca → ${a.atk} de daño a ${tgt.label}.`); sfxHit(); shakeEl();
+      const atk = a.isFoe ? foeAtkVal(a.atk, fa) : a.atk;
+      tgt.hp -= atk; blog(`${a.label} ataca → ${atk} de daño a ${tgt.label}.`); sfxHit(); shakeEl(); boronReact(tgt);
       if (tgt.hp<=0){ tgt.hp=0; tgt.alive=false; blog(` ${tgt.label} cayó…`); }
     });
   }
   b.units.forEach(x=>{ if(x.immuneTurns>0) x.immuneTurns--; });
+  statusTick();
   if (b.units.every(x=>!x.alive)){ b.over=true; b.win=false; blog(` Todas las unidades del grupo cayeron…`); renderBattle(); return; }
+  // Habilidad de robar el turno (Litio): el enemigo vuelve a actuar en vez de
+  // ceder el turno al grupo.
+  if (fa && fa.type==='steal' && !b.over && Math.random() < fa.chance){
+    blog(`${fa.icon} ¡${b.foe.label} usa ${fa.name}! Le roba el turno al grupo.`);
+    sfxHit(); shakeEl();
+    b.turn++;
+    b.phaseIdx = -1; b.turnOwner = 'enemy';
+    renderBattle();
+    setTimeout(groupEnemyTurn, 700);
+    return;
+  }
   b.turn++;
   b.phaseIdx = -1;
   advanceGroupTurn();
@@ -2293,7 +2661,7 @@ function renderGroupBattle(){
         : `<div style="width:64px;height:64px;border-radius:12px;margin:6px auto;background:#0a0e28;display:flex;align-items:center;justify-content:center;font-size:1.8rem;">${me.icon}</div>`);
     mePanel = `<p><b>${me.icon} ${me.label.toUpperCase()}</b></p>${meVisual}
       <div style="background:#300;border-radius:8px;overflow:hidden;height:14px;"><div style="height:100%;width:${pPct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
-      <p class="muted"> ${Math.max(0,me.hp)}/${me.max}</p>`;
+      <p class="muted"> ${Math.max(0,me.hp)}/${me.max}</p>${unitStatusHtml(me)}`;
   } else {
     mePanel = `<p class="muted">Todas tus unidades cayeron.</p>`;
   }
@@ -2342,7 +2710,7 @@ function renderGroupBattle(){
         <p><b>${b.foe.icon} ${b.foe.label.toUpperCase()}</b></p>
         <div style="width:70px;height:70px;border-radius:50%;margin:8px auto;background:${b.foeInfo.gradient};display:flex;align-items:center;justify-content:center;font-weight:800;color:${b.foeInfo.textColor};">${b.foeInfo.letter}</div>
         <div style="background:#003;border-radius:8px;overflow:hidden;height:14px;"><div style="height:100%;width:${hPct}%;background:linear-gradient(90deg,#5be08a,#2fa55e);"></div></div>
-        <p class="muted"> ${Math.max(0,b.foe.hp)}/${b.foe.max}</p>`}
+        <p class="muted"> ${Math.max(0,b.foe.hp)}/${b.foe.max}</p>${foeStatusHtml(b.foe)}`}
       </div>
     </div>
     <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:5px; justify-content:center;">${roster}</div>
@@ -2371,12 +2739,12 @@ function startGroupBattle(d){
         const c = COMBATANTS[key]; if (!c) return;
         units.push({ key, label:(m.name? m.name+': ' : '')+c.label, icon:c.icon, hp:c.hp, max:c.hp,
           atk:c.atk, dodge:c.dodge, ability:c.ability, actCount:0, abilityReady:false, alive:true,
-          negateNext:false, immuneTurns:0, ownerId:m.id, ownerName:m.name||'', avatar:(key==='proton'? (m.avatar||null) : null) });
+          negateNext:false, immuneTurns:0, frozenTurns:0, atkMod:0, atkModTurns:0, cation:false, ownerId:m.id, ownerName:m.name||'', avatar:(key==='proton'? (m.avatar||null) : null) });
       });
     });
     if (units.length === 0){
       const c = COMBATANTS.proton;
-      units = [{ key:'proton', label:c.label, icon:c.icon, hp:c.hp, max:c.hp, atk:c.atk, dodge:c.dodge, ability:c.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0, ownerId:d.hostId, ownerName:'', avatar:state.avatar }];
+      units = [{ key:'proton', label:c.label, icon:c.icon, hp:c.hp, max:c.hp, atk:c.atk, dodge:c.dodge, ability:c.ability, actCount:0, abilityReady:false, alive:true, negateNext:false, immuneTurns:0, frozenTurns:0, atkMod:0, atkModTurns:0, cation:false, ownerId:d.hostId, ownerName:'', avatar:state.avatar }];
     }
     // Orden de jugadores: el anfitrión primero, luego el resto en orden de llegada
     const players = [];
@@ -2391,7 +2759,7 @@ function startGroupBattle(d){
     const names = (d.members||[]).map(m => m.name).join(', ');
     battle = {
       foeType, foeInfo:f, units, active:0,
-      foe:{ hp:fhp, max:fhp, atk:f.atk, dodge:f.dodge, label:f.label, icon:f.icon },
+      foe:{ hp:fhp, max:fhp, atk:f.atk, dodge:f.dodge, label:f.label, icon:f.icon, inertTurns:f.inert||0 },
       turn:1, over:false, win:false, group:true,
       players, phaseIdx:0, turnOwner:players[0].id, activeByOwner, target:'foe',
       log:[` ¡Un ${f.label} salvaje (×${size}) apareció! El grupo (${names}) lo enfrenta juntos.`]
@@ -2419,8 +2787,10 @@ function applyGroupBattleSync(d){
   const f = WILD_FOES[foeType];
   battle = {
     foeType, foeInfo:f, units:s.units, active:s.active,
-    foe:{ hp:s.foe.hp, max:s.foe.max, atk:f.atk, dodge:f.dodge, label:s.foe.label, icon:s.foe.icon },
+    foe:{ hp:s.foe.hp, max:s.foe.max, atk:f.atk, dodge:f.dodge, label:s.foe.label, icon:s.foe.icon, inertTurns:s.foe.inertTurns||0 },
     companion: s.companion ? Object.assign({}, s.companion) : undefined,
+    companions: s.companions ? s.companions.map(c=>Object.assign({}, c)) : undefined,
+    carbonMol: s.carbonMol || undefined,
     target: s.target || 'foe',
     turn:s.turn, over:s.over, win:s.win, group:true,
     players: s.players || [], turnOwner: s.turnOwner || null,
@@ -2469,8 +2839,14 @@ function openInventory(){
   const canLithium = lvl4 && state.protons >= 3 && state.neutrons >= 4 && state.electrons >= 3;
   const lvl5       = getLevel() >= 5;
   const canBeryllium = lvl5 && state.protons >= 4 && state.neutrons >= 5 && state.electrons >= 4;
+  const lvl7       = getLevel() >= 7;
+  const canBoron   = lvl7 && state.protons >= 5 && state.neutrons >= 6 && state.electrons >= 5;
+  const lvl8       = getLevel() >= 8;
+  const canCarbon  = lvl8 && state.protons >= 6 && state.neutrons >= 6 && state.electrons >= 6;
+  const lvl9       = getLevel() >= 9;
+  const canNitrogen= lvl9 && state.protons >= 7 && state.neutrons >= 7 && state.electrons >= 7;
   // Tarjetas equipables (protones, neutrones, electrones y átomos que tengas)
-  const equipCards = ['proton','neutron','electron','hydrogen','helium','lithium','beryllium'].filter(key => ownedCount(key) >= 1).map(key => {
+  const equipCards = ['proton','neutron','electron','hydrogen','helium','lithium','beryllium','boron','carbon','nitrogen'].filter(key => ownedCount(key) >= 1).map(key => {
     const c = COMBATANTS[key];
     const n = ownedCount(key);
     const inParty = Array.isArray(state.party) && state.party.includes(key);
@@ -2479,7 +2855,7 @@ function openInventory(){
     return `<div class="card" style="flex:1; min-width:130px; text-align:center; background:#0a0e28; ${border}cursor:pointer;" onclick="toggleParty('${key}')">
       <div style="height:40px;display:flex;align-items:center;justify-content:center;">${unitBall(key,36) || `<span style="font-size:1.8rem;">${c.icon}</span>`}</div>
       <p><b>${c.label}</b> ×${n}</p>
-      <p style="font-size:.72rem; margin-top:2px; color:var(--muted);">${c.hp} · ${c.atk} · ${c.ability.icon}${(c.ability.immune||c.ability.healAll||c.ability.fission)?`${c.ability.name}/${c.ability.every}t`:`${c.ability.dmg}/${c.ability.every}t`}</p>
+      <p style="font-size:.72rem; margin-top:2px; color:var(--muted);">${c.hp} · ${c.atk} · ${c.ability.icon}${c.ability.passive?`${c.ability.name} (pasiva)`:((c.ability.immune||c.ability.healAll||c.ability.fission)?`${c.ability.name}/${c.ability.every}t`:`${c.ability.dmg}/${c.ability.every}t`)}</p>
       <p style="font-size:.8rem; margin-top:4px; color:${inParty?'var(--gold)':'var(--muted)'};">${inParty?` Equipo #${slot}`:'Click para añadir'}</p>
     </div>`;
   }).join('') || '<p class="muted">Aún no posees combatientes.</p>';
@@ -2519,6 +2895,9 @@ function openInventory(){
         ${state.atoms.helium>0?`<p> Helio: <b>${state.atoms.helium}</b></p>`:''}
         ${state.atoms.lithium>0?`<p> Litio: <b>${state.atoms.lithium}</b></p>`:''}
         ${state.atoms.beryllium>0?`<p> Berilio: <b>${state.atoms.beryllium}</b></p>`:''}
+        ${state.atoms.boron>0?`<p> Boro: <b>${state.atoms.boron}</b></p>`:''}
+        ${state.atoms.carbon>0?`<p> Carbono: <b>${state.atoms.carbon}</b></p>`:''}
+        ${state.atoms.nitrogen>0?`<p> Nitrógeno: <b>${state.atoms.nitrogen}</b></p>`:''}
         ${(state.luckPotions||0)>0?`<p> Poción de suerte x2: <b>${state.luckPotions}</b></p>`:''}
         ${luckActive()?`<p style="color:#7ad67f;"> Suerte x2 activa: <b>${luckRemainStr()}</b></p>`:''}
         ${(state.luckPotions||0)>0?`<button class="btn alt" style="margin-top:8px;" onclick="useLuckPotion()">Usar poción de suerte (+5:00)</button>`:''}
@@ -2559,6 +2938,24 @@ function openInventory(){
           <p class="muted" style="font-size:.68rem;">40 HP · 20 ataque · Fisión c/5t: 80 a enemigos, 10 a todo el equipo, luego se divide en 2 Helios a media vida</p>
           ${lvl5 ? `<button class="btn alt" style="margin-top:8px;" ${canBeryllium?'':'disabled'} onclick="makeAtom('beryllium')">Crear átomo</button>` : `<p class="gold" style="font-size:.72rem; margin-top:6px;">Alcanza el Nivel 5 (400 EXP) para fabricar Berilio.</p>`}
         </div>
+        <div class="card" style="margin-top:10px; background:#0a0e28;">
+          <p><b> Boro</b> <span class="muted" style="font-size:.7rem;">(Nivel 7)</span></p>
+          <p class="muted" style="font-size:.72rem;">5 Protones + 6 Neutrones + 5 Electrones</p>
+          <p class="muted" style="font-size:.68rem;">150 HP · ⚛️ Al recibir daño, 20%: da un protón a un aliado (+15 HP) y su electrón hace 20 de daño al enemigo.</p>
+          ${lvl7 ? `<button class="btn alt" style="margin-top:8px;" ${canBoron?'':'disabled'} onclick="makeAtom('boron')">Crear átomo</button>` : `<p class="gold" style="font-size:.72rem; margin-top:6px;">Alcanza el Nivel 7 para fabricar Boro.</p>`}
+        </div>
+        <div class="card" style="margin-top:10px; background:#0a0e28;">
+          <p><b> Carbono</b> <span class="muted" style="font-size:.7rem;">(Nivel 8)</span></p>
+          <p class="muted" style="font-size:.72rem;">6 Protones + 6 Neutrones + 6 Electrones</p>
+          <p class="muted" style="font-size:.68rem;">180 HP · ⚔️ Ataque múltiple: 50% → 2 golpes, 10% → 3 golpes, 40% → 1 golpe.</p>
+          ${lvl8 ? `<button class="btn alt" style="margin-top:8px;" ${canCarbon?'':'disabled'} onclick="makeAtom('carbon')">Crear átomo</button>` : `<p class="gold" style="font-size:.72rem; margin-top:6px;">Alcanza el Nivel 8 para fabricar Carbono.</p>`}
+        </div>
+        <div class="card" style="margin-top:10px; background:#0a0e28;">
+          <p><b> Nitrógeno</b> <span class="muted" style="font-size:.7rem;">(Nivel 9)</span></p>
+          <p class="muted" style="font-size:.72rem;">7 Protones + 7 Neutrones + 7 Electrones</p>
+          <p class="muted" style="font-size:.68rem;">160 HP · Ataque 20 · ❄️ Al atacar, 10%: congela a un enemigo 5 turnos (enfriamiento 10 turnos).</p>
+          ${lvl9 ? `<button class="btn alt" style="margin-top:8px;" ${canNitrogen?'':'disabled'} onclick="makeAtom('nitrogen')">Crear átomo</button>` : `<p class="gold" style="font-size:.72rem; margin-top:6px;">Alcanza el Nivel 9 para fabricar Nitrógeno.</p>`}
+        </div>
       </div>
 
     </div>
@@ -2598,6 +2995,24 @@ function makeAtom(kind){
     state.protons -= 4; state.neutrons -= 5; state.electrons -= 4;
     if (state.atoms.beryllium == null) state.atoms.beryllium = 0;
     state.atoms.beryllium += 1;
+  } else if (kind === 'boron'){
+    if (getLevel() < 7) return;
+    if (state.protons < 5 || state.neutrons < 6 || state.electrons < 5) return;
+    state.protons -= 5; state.neutrons -= 6; state.electrons -= 5;
+    if (state.atoms.boron == null) state.atoms.boron = 0;
+    state.atoms.boron += 1;
+  } else if (kind === 'carbon'){
+    if (getLevel() < 8) return;
+    if (state.protons < 6 || state.neutrons < 6 || state.electrons < 6) return;
+    state.protons -= 6; state.neutrons -= 6; state.electrons -= 6;
+    if (state.atoms.carbon == null) state.atoms.carbon = 0;
+    state.atoms.carbon += 1;
+  } else if (kind === 'nitrogen'){
+    if (getLevel() < 9) return;
+    if (state.protons < 7 || state.neutrons < 7 || state.electrons < 7) return;
+    state.protons -= 7; state.neutrons -= 7; state.electrons -= 7;
+    if (state.atoms.nitrogen == null) state.atoms.nitrogen = 0;
+    state.atoms.nitrogen += 1;
   }
   if (inWorld) sendStats();
   openInventory();
@@ -2704,6 +3119,9 @@ function applyAccount(d, n){
   if (state.atoms.helium == null) state.atoms.helium = 0;
   if (state.atoms.lithium == null) state.atoms.lithium = 0;
   if (state.atoms.beryllium == null) state.atoms.beryllium = 0;
+  if (state.atoms.boron == null) state.atoms.boron = 0;
+  if (state.atoms.carbon == null) state.atoms.carbon = 0;
+  if (state.atoms.nitrogen == null) state.atoms.nitrogen = 0;
   state.equipped = d.equipped && COMBATANTS[d.equipped] ? d.equipped : 'proton';
   state.party = Array.isArray(d.party) ? d.party.filter(k=>COMBATANTS[k]) : (d.equipped && COMBATANTS[d.equipped] ? [d.equipped] : ['proton']);
   state.exp = (typeof d.exp === 'number') ? d.exp : (d.rewards ? (d.rewards.exp || 0) : 0);
@@ -2818,12 +3236,12 @@ function showBanVote(d){
     <p style="text-align:center;margin-top:12px;font-size:1.1rem;">Este jugador <b>"${nm}"</b></p>
     <div class="card" style="background:#0a0e28;margin-top:8px;"><p style="margin:0;">${reason}</p></div>
     ${mine ? '<p class="gold" style="text-align:center;margin-top:10px;">¡Eres tú el acusado!</p>' : ''}
-    <p style="text-align:center;margin-top:10px;" id="banTimer" class="muted">Vota en ${d.seconds || 30}s…</p>
+    <p style="text-align:center;margin-top:10px;" id="banTimer" class="muted">Vota en ${d.seconds || 60}s…</p>
     <div class="row" style="justify-content:center;margin-top:12px;gap:14px;">
       <button class="btn" id="voteBanBtn" onclick="castBan('ban')">Baneo</button>
       <button class="btn ghost" id="voteNoBtn" onclick="castBan('no')">NO</button>
     </div>`);
-  let left = d.seconds || 30;
+  let left = d.seconds || 60;
   if (banVoteTimer) clearInterval(banVoteTimer);
   banVoteTimer = setInterval(()=>{
     left--;

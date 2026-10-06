@@ -24,18 +24,53 @@ const io     = new Server(server, { maxHttpBufferSize: 1e6 }); // avatar ~ hasta
 app.use(express.static(path.join(__dirname)));
 
 // Mundo compartido (rejilla de tiles)
-const WORLD = { W: 48, H: 13, TILE: 16 };
+const WORLD = { W: 32, H: 36, TILE: 16 };
 
-// Terreno por tiles (debe coincidir con el cliente): 'W' muro infranqueable.
-const GREEN_PIXELS = new Set(['24,1','25,1','25,3','26,2','26,3','26,4','27,3','27,4','27,8','28,7','28,8','28,10','29,6','29,8','29,9','30,3','30,7','30,9']);
+// Terreno por tiles (debe coincidir con el cliente): 'W' agua infranqueable,
+// 'B' bosque, 'G' césped, 'D' desierto, 'S' tienda. 48 columnas x 13 filas.
+const MAP = [
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWBBBBBBBDDDDDDWWWWWWWWWW',
+  'WWWWWWWWWBBBBBBBDDDDDDWWWWWWWWWW',
+  'WWWWWWWWBBBBBBBDDDDDDDDDDDDWWWWW',
+  'WWWWWWWBBBBBBBBDDDDDDDDDDDDDWWWW',
+  'WWWWWWWBBBBBBBBDDDDDDDDDDDDDWWWW',
+  'WWWWWWBBBBBGGGGGGGGDDDDDDDDDWWWW',
+  'WWWWWWBBBBGGGGGGGGGGDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBBGGGGGGGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBGGGGGSSGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBGGGGGSSGGGGDDDDDDDDDWWW',
+  'WWWWBBBBBGGGGGGGGGGGDDDDDDDDWWWW',
+  'WWWWBBBBBGGGGGGGGGGGDDDDDDDDWWWW',
+  'WWWWBBBBBGGGGGGGGGGDDDDDDDDDWWWW',
+  'WWWWBBBBBGGGGGGGGGGDDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGDDDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGDDDDDDDDDDWWWW',
+  'WWWWBBBBBBGGGGGGGGDDDDDDDDDDWWWW',
+  'WWWWBBBBBBBBBBDDDDDDDDDDDDDWWWWW',
+  'WWWWBBBBBBBBBBBBBBBDDDDDDDWWWWWW',
+  'WWWWBBBBBBBBBBBBBBBDDDDDDDWWWWWW',
+  'WWWWBBBBBBBBBBBBBBBBBBBBBWWWWWWW',
+  'WWWWWWBBBBBBBBBBBBBBBBBBBWWWWWWW',
+  'WWWWWWBBBBBBBBBBBBBBBBBBBWWWWWWW',
+  'WWWWWWWBBBBBBBBBBBBBBBBBWWWWWWWW',
+  'WWWWWWWWWBBBBBBBBBBBBBBWWWWWWWWW',
+  'WWWWWWWWWWWWWWBBBBBBWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWBBBBBBWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+  'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW',
+];
 function serverTileAt(x, y) {
-  if (x >= WORLD.W - 1) return 'W';                 // borde negro (col 47)
-  if (x === 0) return (y >= 4 && y <= 8) ? 'S' : 'G';
-  if (GREEN_PIXELS.has(x + ',' + y)) return 'G';
-  if (x >= 24) return 'D';
-  return 'G';
+  if (y < 0 || y >= WORLD.H || x < 0 || x >= WORLD.W) return 'W';
+  return MAP[y][x];
 }
-const SPAWN = { tx: 12, ty: 6 };
+const SPAWN = { tx: 13, ty: 13 };
 
 // players: id -> { id, tx, ty, avatar, name, equipped, stats }
 const players = new Map();
@@ -153,7 +188,7 @@ function spawnTile() {
 // ── Sistema de baneos (votación entre jugadores) ──
 const JAIL_MS         = 5 * 60 * 1000;    // 5 minutos en la cárcel
 const BAN_COOLDOWN_MS = 60 * 60 * 1000;   // 1 hora de espera entre baneos (por quien lo inicia)
-const BAN_VOTE_MS     = 30 * 1000;        // 30 s para votar la encuesta
+const BAN_VOTE_MS     = 60 * 1000;        // 1 minuto para votar la encuesta
 const jailed      = new Map();            // socketId   -> until (timestamp ms)
 const banCooldown = new Map();            // iniciadorId -> until (timestamp ms)
 let   banVote     = null;                 // { targetId, targetName, reason, initiatorId, votes:Map, timer }
