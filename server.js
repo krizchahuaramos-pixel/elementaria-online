@@ -1,28 +1,23 @@
-/* ═════════════════════════════════════════════════════════
-   Elementaria Online — server.js (servidor autoritativo)
-
-   • Sirve la interfaz (index.html, style.css, client.js).
-   • Asigna ID único a cada jugador.
-   • Mantiene en memoria el mundo compartido: posición (tile) + avatar
-     (pixel-art 25x25) de cada jugador.
-   • Sincroniza en tiempo real movimientos y entradas/salidas.
-   • Sin base de datos.
-
-   El mundo es una rejilla de tiles WORLD.W x WORLD.H. El servidor valida
-   que las coordenadas estén dentro de los límites antes de difundirlas.
-   ═════════════════════════════════════════════════════════ */
-
-const express  = require('express');
-const http     = require('http');
+/* ============================================================
+   ELEMENTARIA ONLINE - servidor multijugador
+   Sirve el juego (carpeta /public) y gestiona la presencia de
+   jugadores, el chat y la tabla de clasificacion con socket.io.
+   ============================================================ */
+const path = require('path');
+const http = require('http');
+const express = require('express');
 const { Server } = require('socket.io');
-const path     = require('path');
 
-const app    = express();
+const app = express();
+app.use(express.static(path.join(__dirname, 'public')));
+
 const server = http.createServer(app);
-const io     = new Server(server, { maxHttpBufferSize: 1e6 }); // avatar ~ hasta 1MB
+const io = new Server(server);
 
-app.use(express.static(path.join(__dirname)));
+// id de socket -> perfil del jugador
+const players = {};
 
+<<<<<<< HEAD
 // Mundo compartido (rejilla de tiles)
 const WORLD = { W: 32, H: 36, TILE: 16 };
 
@@ -170,19 +165,78 @@ function broadcastTradeState(aId, bId) {
   const payload = {
     offers:    { [aId]: a.offer,     [bId]: b.offer },
     confirmed: { [aId]: a.confirmed, [bId]: b.confirmed }
+=======
+function sanitize(p){
+  p = p || {};
+  const hsl = /^hsl\((\d{1,3}),(\d{1,3})%,(\d{1,3})%\)$/.test(String(p.color));
+  return {
+    name: String(p.name || 'Jugador').slice(0, 16),
+    color: hsl ? p.color : 'hsl(200,70%,55%)',
+    x: Number.isFinite(p.x) ? Math.max(0, Math.min(31, p.x | 0)) : 13,
+    y: Number.isFinite(p.y) ? Math.max(0, Math.min(35, p.y | 0)) : 13,
+    electrons: Math.max(0, p.electrons | 0),
+    Q: Math.max(0, p.Q | 0),
+    wins: Math.max(0, p.wins | 0),
+    level: Math.max(1, (p.level | 0) || 1)
+>>>>>>> fe6ae52 (Añadir nuevos elementos, habilidades y recompensas)
   };
-  io.to(aId).emit('trade-state', payload);
-  io.to(bId).emit('trade-state', payload);
-}
-function cleanupTrade(id) {
-  const partner = inTrade.get(id);
-  inTrade.delete(id); tradeData.delete(id);
-  if (partner) { inTrade.delete(partner); tradeData.delete(partner); }
-  return partner;
 }
 
-function spawnTile() {
-  return { tx: SPAWN.tx, ty: SPAWN.ty };
+function roster(){
+  return Object.keys(players).map(id => Object.assign({ id }, players[id]));
+}
+
+<<<<<<< HEAD
+// ── Sistema de baneos (votación entre jugadores) ──
+const JAIL_MS         = 5 * 60 * 1000;    // 5 minutos en la cárcel
+const BAN_COOLDOWN_MS = 60 * 60 * 1000;   // 1 hora de espera entre baneos (por quien lo inicia)
+const BAN_VOTE_MS     = 60 * 1000;        // 1 minuto para votar la encuesta
+const jailed      = new Map();            // socketId   -> until (timestamp ms)
+const banCooldown = new Map();            // iniciadorId -> until (timestamp ms)
+let   banVote     = null;                 // { targetId, targetName, reason, initiatorId, votes:Map, timer }
+
+function isJailed(id) {
+  const u = jailed.get(id);
+  if (!u) return false;
+  if (Date.now() >= u) { jailed.delete(id); return false; }
+  return true;
+}
+
+function finishBanVote() {
+  if (!banVote) return;
+  const v = banVote;
+  if (v.timer) { clearTimeout(v.timer); v.timer = null; }
+  let ban = 0, no = 0;
+  v.votes.forEach((c) => { if (c === 'ban') ban++; else if (c === 'no') no++; });
+  if (ban > no) {
+    // Gana Baneo -> a la cárcel
+    banVote = null;
+    const until = Date.now() + JAIL_MS;
+    jailed.set(v.targetId, until);
+    banCooldown.set(v.initiatorId, Date.now() + BAN_COOLDOWN_MS);
+    io.emit('ban-result', { outcome: 'ban', targetId: v.targetId, targetName: v.targetName, reason: v.reason, until });
+    io.to(v.targetId).emit('jailed', { until, reason: v.reason });
+    console.log(`[B] ${v.targetName} enviado a la cárcel por votación (${ban} vs ${no})`);
+  } else if (no > ban) {
+    // Gana NO -> advertencia al objetivo
+    banVote = null;
+    banCooldown.set(v.initiatorId, Date.now() + BAN_COOLDOWN_MS);
+    io.emit('ban-result', { outcome: 'no', targetId: v.targetId, targetName: v.targetName, reason: v.reason });
+    io.to(v.targetId).emit('ban-warning', { reason: v.reason });
+  } else {
+    // Empate -> se repite la encuesta
+    v.votes = new Map();
+    v.startedAt = Date.now();
+    io.emit('ban-vote', { targetId: v.targetId, targetName: v.targetName, reason: v.reason, initiatorId: v.initiatorId, seconds: BAN_VOTE_MS / 1000, tie: true });
+    v.timer = setTimeout(finishBanVote, BAN_VOTE_MS);
+  }
+}
+
+function cancelBanVote(reason) {
+  if (!banVote) return;
+  if (banVote.timer) clearTimeout(banVote.timer);
+  banVote = null;
+  io.emit('ban-cancel', { reason: reason || '' });
 }
 
 // ── Sistema de baneos (votación entre jugadores) ──
@@ -722,20 +776,39 @@ io.on('connection', (socket) => {
     io.emit('player-left', { id: socket.id });
     broadcastLeaderboard();
     console.log(`[-] Desconexión: ${socket.id} (${players.size} jugadores)`);
+=======
+io.on('connection', socket => {
+  console.log('Jugador conectado:', socket.id);
+
+  socket.on('join', p => {
+    players[socket.id] = sanitize(p);
+    io.emit('roster', roster());
+  });
+
+  socket.on('update', p => {
+    if (!players[socket.id]) players[socket.id] = sanitize(p);
+    else players[socket.id] = sanitize(p);
+    io.emit('roster', roster());
+  });
+
+  socket.on('chat', m => {
+    const p = players[socket.id] || {};
+    const text = String((m && m.text) || '').slice(0, 120).trim();
+    if (!text) return;
+    io.emit('chat', { id: socket.id, name: p.name || 'Jugador', text });
+  });
+
+  socket.on('disconnect', () => {
+    delete players[socket.id];
+    io.emit('roster', roster());
+    console.log('Jugador desconectado:', socket.id);
+>>>>>>> fe6ae52 (Añadir nuevos elementos, habilidades y recompensas)
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('\n  Elementaria Online — servidor iniciado');
-  console.log('   Local:  http://localhost:' + PORT);
-  const nets = require('os').networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        console.log('   WiFi:   http://' + net.address + ':' + PORT + '   (esta URL la abre tu amigo)');
-      }
-    }
-  }
-  console.log('');
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log('Elementaria Online escuchando en http://localhost:' + PORT);
+  console.log('Para jugar con amigos en tu red, comparteles tu IP local y el puerto ' + PORT + '.');
 });
