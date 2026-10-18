@@ -1,14 +1,12 @@
 {
   "name": "elementaria-online",
   "version": "1.0.0",
-  "private": true,
-  "description": "Elementaria - version multijugador online (presencia en el mapa, chat y tabla de clasificacion en tiempo real)",
+  "description": "Elementaria multijugador online (LAN) con Node.js + Socket.IO, servidor autoritativo",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
+  "type": "commonjs",
+  "scripts": { "start": "node server.js" },
   "dependencies": {
-    "express": "4.21.2",
-    "socket.io": "4.8.1"
+    "express": "4.19.2",
+    "socket.io": "4.7.5"
   }
 }
